@@ -58,7 +58,7 @@
           <div class="panel-actions">
             <button class="panel-button" id="muteButton" type="button" title="Silenciar microfono" aria-label="Silenciar microfono">M</button>
             <button class="panel-button" id="deafenButton" type="button" title="Ensordecer" aria-label="Ensordecer">A</button>
-            <button class="panel-button" id="settingsButton" type="button" title="Ajustes" aria-label="Ajustes">⚙</button>
+            <button class="panel-button" id="settingsButton" type="button" title="Ajustes" aria-label="Ajustes">S</button>
           </div>
         </footer>
       </aside>
@@ -72,9 +72,9 @@
           <p id="channelTopic">Chat local en tiempo real</p>
           <div class="topbar-actions" aria-label="Acciones">
             <button class="topbar-button" id="inviteButton" type="button" title="Copiar invitacion" aria-label="Copiar invitacion">Invitar</button>
-            <button class="icon-button" id="toggleMembersButton" type="button" title="Mostrar miembros" aria-label="Mostrar miembros">☰</button>
+            <button class="icon-button" id="toggleMembersButton" type="button" title="Mostrar miembros" aria-label="Mostrar miembros">M</button>
             <label class="search-box" aria-label="Buscar mensajes">
-              <span aria-hidden="true">⌕</span>
+              <span aria-hidden="true">?</span>
               <input id="searchInput" type="search" placeholder="Buscar">
             </label>
             <span id="connectionStatus">Conectando...</span>
@@ -87,9 +87,10 @@
             <ol id="messages" class="messages" aria-live="polite"></ol>
 
             <form id="messageForm" class="composer" aria-label="Enviar mensaje">
-              <button class="composer-icon" type="button" aria-label="Agregar archivo" title="Agregar archivo">+</button>
+              <button class="composer-icon" id="attachButton" type="button" aria-label="Agregar archivo" title="Agregar archivo">+</button>
+              <input id="fileInput" type="file" accept="image/*" hidden>
               <textarea id="messageInput" maxlength="500" rows="1" placeholder="Enviar mensaje a #general"></textarea>
-              <button class="emoji-button" id="emojiButton" type="button" aria-label="Insertar emoji" title="Insertar emoji">☺</button>
+              <button class="emoji-button" id="emojiButton" type="button" aria-label="Insertar emoji" title="Insertar emoji">:)</button>
               <button class="send-button" type="submit" aria-label="Enviar mensaje" title="Enviar">Enviar</button>
             </form>
           </section>
@@ -112,6 +113,18 @@
           <span>Nombre de usuario</span>
           <input id="settingsNameInput" maxlength="32" autocomplete="name" placeholder="Usuario">
         </label>
+        <label class="settings-field">
+          <span>Estado</span>
+          <input id="settingsStatusInput" maxlength="80" placeholder="Disponible">
+        </label>
+        <label class="settings-field">
+          <span>Color</span>
+          <input id="settingsColorInput" type="color" value="#949cf7">
+        </label>
+        <label class="settings-field">
+          <span>Avatar</span>
+          <input id="settingsAvatarInput" type="file" accept="image/*">
+        </label>
         <div class="settings-row">
           <span>Microfono</span>
           <strong id="muteStatus">Activo</strong>
@@ -121,6 +134,32 @@
           <strong id="deafenStatus">Activo</strong>
         </div>
         <button class="save-settings" id="saveSettingsButton" value="close" type="submit">Guardar cambios</button>
+      </form>
+    </dialog>
+    <dialog class="settings-dialog" id="adminDialog">
+      <form method="dialog" class="settings-panel">
+        <header>
+          <h2>Administracion</h2>
+          <button class="icon-button" value="close" type="submit" aria-label="Cerrar">X</button>
+        </header>
+        <label class="settings-field">
+          <span>PIN admin</span>
+          <input id="adminPinInput" type="password" placeholder="1234">
+        </label>
+        <label class="settings-field">
+          <span>ID usuario</span>
+          <input id="adminUserInput" placeholder="Click en un usuario">
+        </label>
+        <label class="settings-field">
+          <span>Rol</span>
+          <select id="adminRoleInput">
+            <option value="member">Member</option>
+            <option value="mod">Mod</option>
+            <option value="admin">Admin</option>
+          </select>
+        </label>
+        <button class="save-settings" id="saveRoleButton" value="close" type="submit">Guardar rol</button>
+        <button class="save-settings" id="toggleLockButton" value="close" type="submit">Bloquear/desbloquear canal</button>
       </form>
     </dialog>
     <div id="remoteAudio" aria-hidden="true"></div>

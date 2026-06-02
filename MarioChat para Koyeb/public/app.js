@@ -14,6 +14,7 @@ const voiceChannels = document.querySelector("#voiceChannels");
 const addServerButton = document.querySelector("#addServerButton");
 const addTextChannelButton = document.querySelector("#addTextChannelButton");
 const addVoiceChannelButton = document.querySelector("#addVoiceChannelButton");
+const guildMenuButton = document.querySelector("#guildMenuButton");
 const inviteButton = document.querySelector("#inviteButton");
 const toggleMembersButton = document.querySelector("#toggleMembersButton");
 const searchInput = document.querySelector("#searchInput");
@@ -32,6 +33,17 @@ const voiceStatus = document.querySelector("#voiceStatus");
 const voiceChannelName = document.querySelector("#voiceChannelName");
 const leaveVoiceButton = document.querySelector("#leaveVoiceButton");
 const remoteAudio = document.querySelector("#remoteAudio");
+const attachButton = document.querySelector("#attachButton");
+const fileInput = document.querySelector("#fileInput");
+const settingsStatusInput = document.querySelector("#settingsStatusInput");
+const settingsColorInput = document.querySelector("#settingsColorInput");
+const settingsAvatarInput = document.querySelector("#settingsAvatarInput");
+const adminDialog = document.querySelector("#adminDialog");
+const adminPinInput = document.querySelector("#adminPinInput");
+const adminUserInput = document.querySelector("#adminUserInput");
+const adminRoleInput = document.querySelector("#adminRoleInput");
+const saveRoleButton = document.querySelector("#saveRoleButton");
+const toggleLockButton = document.querySelector("#toggleLockButton");
 
 const guilds = {
   mariochat: {
@@ -68,8 +80,19 @@ const userId = localStorage.getItem("userId") || (
 );
 let currentGuild = localStorage.getItem("currentGuild") || "mariochat";
 let currentChannel = localStorage.getItem("currentChannel") || "general";
+let currentMode = "channel";
+let dmPeer = null;
 let messageHistory = [];
 let isLoadingHistory = false;
+let pendingAttachment = null;
+let appState = { roles: {}, lockedChannels: {}, turn: null };
+let profile = {
+  name: savedName || "Usuario",
+  status: localStorage.getItem("profileStatus") || "Disponible",
+  color: localStorage.getItem("profileColor") || "#949cf7",
+  avatar: localStorage.getItem("profileAvatar") || "",
+  role: "member"
+};
 let isMuted = localStorage.getItem("isMuted") === "true";
 let isDeafened = localStorage.getItem("isDeafened") === "true";
 let currentVoiceChannel = "";
@@ -78,7 +101,7 @@ let latestUsers = [];
 let lastVoiceSignalId = 0;
 const handledVoiceSignals = new Set();
 const peers = new Map();
-const peerConfig = {
+let peerConfig = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
 };
 
@@ -99,7 +122,7 @@ function currentName() {
 }
 
 function displayName() {
-  return currentName() || "Usuario";
+  return currentName() || profile.name || "Usuario";
 }
 
 function initials(name) {
@@ -123,7 +146,16 @@ function messageChannel(message) {
 function updateProfile() {
   const name = displayName();
   const shortName = initials(name);
-  profileAvatar.textContent = shortName;
+  profile.name = name;
+  profileAvatar.replaceChildren();
+  if (profile.avatar) {
+    const image = document.createElement("img");
+    image.src = profile.avatar;
+    image.alt = name;
+    profileAvatar.append(image);
+  } else {
+    profileAvatar.textContent = shortName;
+  }
 }
 
 function updateAudioButtons() {
@@ -153,11 +185,19 @@ function renderMembers(users) {
 
     const avatar = document.createElement("div");
     avatar.className = "avatar online";
-    avatar.textContent = initials(user.name);
+    if (user.avatar) {
+      const image = document.createElement("img");
+      image.src = user.avatar;
+      image.alt = user.name;
+      avatar.append(image);
+    } else {
+      avatar.textContent = initials(user.name);
+    }
 
     const details = document.createElement("div");
     const name = document.createElement("strong");
     name.textContent = user.name;
+    name.style.color = user.roleColor || user.color || "#dbdee1";
 
     const status = document.createElement("span");
     if (user.voiceChannel && user.voiceGuild === currentGuild) {
@@ -168,6 +208,8 @@ function renderMembers(users) {
 
     details.append(name, status);
     item.append(avatar, details);
+    item.dataset.userId = user.id;
+    item.dataset.name = user.name;
     members.append(item);
   });
   syncVoicePeers();
@@ -181,6 +223,7 @@ function createChannelButton(channel, type) {
   button.dataset.type = type;
   if (type === "text" && channel === currentChannel) button.classList.add("active");
   if (type === "voice" && channel === currentVoiceChannel) button.classList.add("voice-joined");
+  if (type === "text" && appState.lockedChannels?.[`${currentGuild}:${channel}`]) button.classList.add("locked-channel");
 
   const icon = document.createElement("span");
   icon.className = "hash";
@@ -217,7 +260,14 @@ function renderMessage(message) {
 
   const avatar = document.createElement("div");
   avatar.className = "avatar message-avatar";
-  avatar.textContent = initials(message.name);
+  if (message.profile?.avatar) {
+    const image = document.createElement("img");
+    image.src = message.profile.avatar;
+    image.alt = message.name;
+    avatar.append(image);
+  } else {
+    avatar.textContent = initials(message.name);
+  }
 
   const meta = document.createElement("div");
   meta.className = "message-meta";
@@ -225,6 +275,15 @@ function renderMessage(message) {
   const name = document.createElement("span");
   name.className = "message-name";
   name.textContent = message.name;
+  name.style.color = message.profile?.roleColor || message.profile?.color || "";
+
+  if (message.profile?.roleName) {
+    const role = document.createElement("span");
+    role.className = "role-pill";
+    role.textContent = message.profile.roleName;
+    role.style.color = message.profile.roleColor;
+    name.append(role);
+  }
 
   const time = document.createElement("time");
   time.dateTime = message.time;
@@ -236,6 +295,30 @@ function renderMessage(message) {
 
   meta.append(name, time);
   item.append(avatar, meta, text);
+  if (message.attachment?.data && message.attachment.mime?.startsWith("image/")) {
+    const attachment = document.createElement("div");
+    attachment.className = "message-attachment";
+    const image = document.createElement("img");
+    image.src = message.attachment.data;
+    image.alt = message.attachment.name || "imagen";
+    attachment.append(image);
+    item.append(attachment);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+  ["like", "fire", "haha"].forEach(emoji => {
+    const button = document.createElement("button");
+    button.className = "reaction-button";
+    button.type = "button";
+    button.dataset.messageId = message.id;
+    button.dataset.emoji = emoji;
+    const users = message.reactions?.[emoji] || [];
+    button.classList.toggle("active", users.includes(userId));
+    button.textContent = `${emoji} ${users.length || ""}`.trim();
+    actions.append(button);
+  });
+  item.append(actions);
   messagesList.append(item);
 }
 
@@ -243,7 +326,13 @@ function renderMessages() {
   messagesList.replaceChildren();
   const query = searchInput.value.trim().toLowerCase();
   const visibleMessages = messageHistory
-    .filter(message => messageGuild(message) === currentGuild && messageChannel(message) === currentChannel)
+    .filter(message => {
+      if (currentMode === "dm" && dmPeer) {
+        return message.type === "dm" &&
+          ((message.userId === userId && message.to === dmPeer.id) || (message.userId === dmPeer.id && message.to === userId));
+      }
+      return message.type !== "dm" && messageGuild(message) === currentGuild && messageChannel(message) === currentChannel;
+    })
     .filter(message => {
       if (!query) return true;
       return `${message.name} ${message.text}`.toLowerCase().includes(query);
@@ -252,7 +341,8 @@ function renderMessages() {
   if (!visibleMessages.length) {
     const emptyItem = document.createElement("li");
     emptyItem.className = "empty-state";
-    emptyItem.textContent = query ? "No se encontraron mensajes." : `No hay mensajes en #${currentChannel}.`;
+    emptyItem.textContent = query ? "No se encontraron mensajes." :
+      currentMode === "dm" ? `No hay mensajes privados con ${dmPeer?.name || "usuario"}.` : `No hay mensajes en #${currentChannel}.`;
     messagesList.append(emptyItem);
   } else {
     visibleMessages.forEach(renderMessage);
@@ -300,10 +390,11 @@ async function loadMessages() {
   isLoadingHistory = true;
 
   try {
-    const params = new URLSearchParams({
-      guild: currentGuild,
-      channel: currentChannel
-    });
+    const params = new URLSearchParams(
+      currentMode === "dm" && dmPeer
+        ? { type: "dm", userId, peerId: dmPeer.id }
+        : { type: "channel", guild: currentGuild, channel: currentChannel }
+    );
     const response = await fetch(`/messages?${params.toString()}`, {
       cache: "no-store"
     });
@@ -315,6 +406,24 @@ async function loadMessages() {
   } finally {
     isLoadingHistory = false;
   }
+}
+
+function applyState(state) {
+  appState = state || appState;
+  peerConfig = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      ...(appState.turn ? [appState.turn] : [])
+    ]
+  };
+  renderChannels();
+  renderMessages();
+}
+
+async function loadState() {
+  const response = await fetch("/state", { cache: "no-store" }).catch(() => null);
+  if (!response?.ok) return;
+  applyState(await response.json());
 }
 
 function updateServerButtons() {
@@ -367,10 +476,23 @@ function setCurrentChannel(channel) {
   if (!guild.text.includes(channel)) return;
 
   currentChannel = channel;
+  currentMode = "channel";
+  dmPeer = null;
   localStorage.setItem("currentChannel", currentChannel);
   channelName.textContent = currentChannel;
   messageInput.placeholder = `Enviar mensaje a #${currentChannel}`;
   updateActiveChannel();
+  renderMessages();
+  loadMessages();
+}
+
+function openDirectMessage(user) {
+  if (!user?.id || user.id === userId) return;
+  currentMode = "dm";
+  dmPeer = user;
+  channelName.textContent = `@${user.name}`;
+  channelTopic.textContent = "Mensaje privado";
+  messageInput.placeholder = `Enviar mensaje privado a ${user.name}`;
   renderMessages();
   loadMessages();
 }
@@ -397,6 +519,29 @@ async function sendPresence() {
   } catch (error) {
     renderMembers([{ id: userId, name: displayName() }]);
   }
+}
+
+function playNotifySound() {
+  try {
+    const audioContext = new AudioContext();
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.frequency.value = 740;
+    gain.gain.value = 0.05;
+    oscillator.connect(gain);
+    gain.connect(audioContext.destination);
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + 0.12);
+  } catch (_) {}
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 async function postVoiceSignal(to, type, payload) {
@@ -598,9 +743,20 @@ function connectEvents() {
   events.addEventListener("message", event => {
     const message = JSON.parse(event.data);
     mergeMessages([message]);
-    if (messageGuild(message) === currentGuild && messageChannel(message) === currentChannel) {
-      renderMessages();
+    renderMessages();
+    if (message.userId !== userId && Notification.permission === "granted") {
+      new Notification(`MarioChat - ${message.name}`, { body: message.text || "Envio una imagen" });
+      playNotifySound();
     }
+  });
+
+  events.addEventListener("message-update", event => {
+    mergeMessages([JSON.parse(event.data)]);
+    renderMessages();
+  });
+
+  events.addEventListener("state", event => {
+    applyState(JSON.parse(event.data));
   });
 
   events.addEventListener("presence", event => {
@@ -648,11 +804,18 @@ addTextChannelButton.addEventListener("click", () => addChannel("text"));
 addVoiceChannelButton.addEventListener("click", () => addChannel("voice"));
 
 inviteButton.addEventListener("click", async () => {
-  await navigator.clipboard?.writeText(window.location.href).catch(() => {});
+  const response = await fetch("/invite", { method: "POST" }).catch(() => null);
+  const invite = response?.ok ? await response.json() : { id: "directo" };
+  const inviteUrl = `${window.location.origin}${window.location.pathname}?invite=${invite.id}`;
+  await navigator.clipboard?.writeText(inviteUrl).catch(() => {});
   inviteButton.textContent = "Copiado";
   window.setTimeout(() => {
     inviteButton.textContent = "Invitar";
   }, 1400);
+});
+
+guildMenuButton.addEventListener("click", () => {
+  adminDialog.showModal();
 });
 
 toggleMembersButton.addEventListener("click", () => {
@@ -660,6 +823,26 @@ toggleMembersButton.addEventListener("click", () => {
 });
 
 searchInput.addEventListener("input", renderMessages);
+
+attachButton.addEventListener("click", () => {
+  fileInput.click();
+});
+
+fileInput.addEventListener("change", async () => {
+  const file = fileInput.files?.[0];
+  if (!file) return;
+  if (file.size > 1_500_000) {
+    window.alert("La imagen es muy grande. Usa una menor de 1.5 MB.");
+    fileInput.value = "";
+    return;
+  }
+  pendingAttachment = {
+    name: file.name,
+    mime: file.type,
+    data: await readFileAsDataUrl(file)
+  };
+  messageInput.placeholder = `Imagen lista: ${file.name}`;
+});
 
 emojiButton.addEventListener("click", () => {
   const insert = " :)";
@@ -689,20 +872,92 @@ leaveVoiceButton.addEventListener("click", () => {
 
 settingsButton.addEventListener("click", () => {
   settingsNameInput.value = displayName();
+  settingsStatusInput.value = profile.status;
+  settingsColorInput.value = profile.color;
   settingsDialog.showModal();
 });
 
-saveSettingsButton.addEventListener("click", () => {
+saveSettingsButton.addEventListener("click", async () => {
+  const avatarFile = settingsAvatarInput.files?.[0];
+  if (avatarFile) {
+    profile.avatar = await readFileAsDataUrl(avatarFile);
+    localStorage.setItem("profileAvatar", profile.avatar);
+  }
   nameInput.value = settingsNameInput.value.trim();
+  profile.name = displayName();
+  profile.status = settingsStatusInput.value.trim() || "Disponible";
+  profile.color = settingsColorInput.value || "#949cf7";
   localStorage.setItem("chatName", currentName());
+  localStorage.setItem("profileStatus", profile.status);
+  localStorage.setItem("profileColor", profile.color);
   updateProfile();
+  await fetch("/profile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: userId, ...profile })
+  }).catch(() => {});
   sendPresence();
+});
+
+saveRoleButton.addEventListener("click", async () => {
+  await fetch("/admin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      pin: adminPinInput.value,
+      action: "role",
+      userId: adminUserInput.value.trim(),
+      role: adminRoleInput.value
+    })
+  }).catch(() => {});
+  loadPresence();
+});
+
+toggleLockButton.addEventListener("click", async () => {
+  const key = `${currentGuild}:${currentChannel}`;
+  await fetch("/admin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      pin: adminPinInput.value,
+      action: "lock",
+      guild: currentGuild,
+      channel: currentChannel,
+      locked: !appState.lockedChannels?.[key]
+    })
+  }).catch(() => {});
+  loadState();
 });
 
 textChannels.addEventListener("click", event => {
   const button = event.target.closest(".channel[data-type='text']");
   if (!button) return;
   setCurrentChannel(button.dataset.channel);
+});
+
+members.addEventListener("click", event => {
+  const item = event.target.closest(".member");
+  if (!item) return;
+  adminUserInput.value = item.dataset.userId || "";
+  openDirectMessage({ id: item.dataset.userId, name: item.dataset.name });
+});
+
+messagesList.addEventListener("click", async event => {
+  const button = event.target.closest(".reaction-button");
+  if (!button) return;
+  const response = await fetch("/reaction", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messageId: button.dataset.messageId,
+      emoji: button.dataset.emoji,
+      userId
+    })
+  }).catch(() => null);
+  if (response?.ok) {
+    mergeMessages([await response.json()]);
+    renderMessages();
+  }
 });
 
 voiceChannels.addEventListener("click", event => {
@@ -753,7 +1008,7 @@ messageForm.addEventListener("submit", async event => {
     nameInput.focus();
     return;
   }
-  if (!text) return;
+  if (!text && !pendingAttachment) return;
 
   const submitButton = messageForm.querySelector(".send-button");
   submitButton.disabled = true;
@@ -763,10 +1018,14 @@ messageForm.addEventListener("submit", async event => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        userId,
         name,
         text,
+        type: currentMode,
+        to: dmPeer?.id || "",
         guild: currentGuild,
-        channel: currentChannel
+        channel: currentChannel,
+        attachment: pendingAttachment
       })
     });
 
@@ -776,6 +1035,11 @@ messageForm.addEventListener("submit", async event => {
     }
 
     messageInput.value = "";
+    pendingAttachment = null;
+    fileInput.value = "";
+    messageInput.placeholder = currentMode === "dm" && dmPeer
+      ? `Enviar mensaje privado a ${dmPeer.name}`
+      : `Enviar mensaje a #${currentChannel}`;
     messageInput.style.height = "auto";
     messageInput.focus();
   } finally {
@@ -790,9 +1054,18 @@ renderMembers([{ id: userId, name: displayName() }]);
 Object.keys(customGuilds).forEach(addGuildButton);
 setCurrentGuild(currentGuild);
 connectEvents();
+loadState();
 loadMessages();
+fetch("/profile", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ id: userId, ...profile, name: displayName() })
+}).catch(() => {});
 sendPresence();
 loadPresence();
+if ("Notification" in window && Notification.permission === "default") {
+  Notification.requestPermission().catch(() => {});
+}
 setInterval(loadMessages, 3000);
 setInterval(sendPresence, 5000);
 setInterval(loadPresence, 7000);
