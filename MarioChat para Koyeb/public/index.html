@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MarioChat</title>
+    <link rel="icon" href="chat-icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="discord-shell">
+      <nav class="server-rail" aria-label="Servidores">
+        <button class="server-button home active" type="button" aria-label="MarioChat" data-guild="mariochat">M</button>
+        <div class="rail-divider"></div>
+        <button class="server-button" type="button" aria-label="Game Chat" data-guild="game-chat">GC</button>
+        <button class="server-button" type="button" aria-label="Equipo" data-guild="equipo">EQ</button>
+        <button class="server-button add" type="button" aria-label="Agregar servidor" id="addServerButton">+</button>
+      </nav>
+
+      <aside class="guild-sidebar" aria-label="Canales">
+        <header class="guild-header">
+          <h1 id="guildName">MarioChat</h1>
+          <button class="icon-button" id="guildMenuButton" type="button" title="Menu del servidor" aria-label="Menu del servidor">v</button>
+        </header>
+
+        <section class="channel-group" aria-label="Canales de texto">
+          <div class="group-title">
+            <span aria-hidden="true">v</span>
+            <span>Canales de texto</span>
+            <button class="mini-action" id="addTextChannelButton" type="button" title="Crear canal de texto" aria-label="Crear canal de texto">+</button>
+          </div>
+          <div id="textChannels"></div>
+        </section>
+
+        <section class="channel-group" aria-label="Canales de voz">
+          <div class="group-title">
+            <span aria-hidden="true">v</span>
+            <span>Canales de voz</span>
+            <button class="mini-action" id="addVoiceChannelButton" type="button" title="Crear canal de voz" aria-label="Crear canal de voz">+</button>
+          </div>
+          <div id="voiceChannels"></div>
+        </section>
+
+        <section class="voice-connection" id="voiceConnection" aria-label="Conexion de voz" hidden>
+          <div>
+            <strong id="voiceStatus">Voz conectada</strong>
+            <span id="voiceChannelName">Sala 1</span>
+          </div>
+          <button class="panel-button danger" id="leaveVoiceButton" type="button" title="Desconectar voz" aria-label="Desconectar voz">X</button>
+        </section>
+
+        <footer class="user-panel" aria-label="Perfil">
+          <div class="avatar small" id="profileAvatar">U</div>
+          <label class="profile-name">
+            <span>Tu nombre</span>
+            <input id="nameInput" maxlength="32" autocomplete="name" placeholder="Usuario">
+          </label>
+          <div class="panel-actions">
+            <button class="panel-button" id="muteButton" type="button" title="Silenciar microfono" aria-label="Silenciar microfono">M</button>
+            <button class="panel-button" id="deafenButton" type="button" title="Ensordecer" aria-label="Ensordecer">A</button>
+            <button class="panel-button" id="settingsButton" type="button" title="Ajustes" aria-label="Ajustes">⚙</button>
+          </div>
+        </footer>
+      </aside>
+
+      <section class="chat-view" aria-label="Chat general">
+        <header class="chat-topbar">
+          <div class="channel-title">
+            <span class="hash">#</span>
+            <strong id="channelName">general</strong>
+          </div>
+          <p id="channelTopic">Chat local en tiempo real</p>
+          <div class="topbar-actions" aria-label="Acciones">
+            <button class="topbar-button" id="inviteButton" type="button" title="Copiar invitacion" aria-label="Copiar invitacion">Invitar</button>
+            <button class="icon-button" id="toggleMembersButton" type="button" title="Mostrar miembros" aria-label="Mostrar miembros">☰</button>
+            <label class="search-box" aria-label="Buscar mensajes">
+              <span aria-hidden="true">⌕</span>
+              <input id="searchInput" type="search" placeholder="Buscar">
+            </label>
+            <span id="connectionStatus">Conectando...</span>
+            <span class="status-dot" aria-hidden="true"></span>
+          </div>
+        </header>
+
+        <div class="chat-layout">
+          <section class="message-column" aria-label="Mensajes">
+            <ol id="messages" class="messages" aria-live="polite"></ol>
+
+            <form id="messageForm" class="composer" aria-label="Enviar mensaje">
+              <button class="composer-icon" type="button" aria-label="Agregar archivo" title="Agregar archivo">+</button>
+              <textarea id="messageInput" maxlength="500" rows="1" placeholder="Enviar mensaje a #general"></textarea>
+              <button class="emoji-button" id="emojiButton" type="button" aria-label="Insertar emoji" title="Insertar emoji">☺</button>
+              <button class="send-button" type="submit" aria-label="Enviar mensaje" title="Enviar">Enviar</button>
+            </form>
+          </section>
+
+          <aside class="member-list" aria-label="Miembros">
+            <h2>En linea - <span id="onlineText">1</span></h2>
+            <div id="members"></div>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <dialog class="settings-dialog" id="settingsDialog">
+      <form method="dialog" class="settings-panel">
+        <header>
+          <h2>Ajustes de MarioChat</h2>
+          <button class="icon-button" value="close" type="submit" aria-label="Cerrar">×</button>
+        </header>
+        <label class="settings-field">
+          <span>Nombre de usuario</span>
+          <input id="settingsNameInput" maxlength="32" autocomplete="name" placeholder="Usuario">
+        </label>
+        <div class="settings-row">
+          <span>Microfono</span>
+          <strong id="muteStatus">Activo</strong>
+        </div>
+        <div class="settings-row">
+          <span>Audio</span>
+          <strong id="deafenStatus">Activo</strong>
+        </div>
+        <button class="save-settings" id="saveSettingsButton" value="close" type="submit">Guardar cambios</button>
+      </form>
+    </dialog>
+    <div id="remoteAudio" aria-hidden="true"></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
