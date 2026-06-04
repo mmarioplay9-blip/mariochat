@@ -14,6 +14,8 @@ const DB_FILE = path.join(DATA_DIR, "mariochat.json");
 const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = Number(process.env.MAX_ATTACHMENT_BYTES || process.env.MAX_UPLOAD_BYTES || DEFAULT_MAX_UPLOAD_BYTES);
 const MAX_BODY = Number(process.env.MAX_BODY_BYTES || Math.ceil(MAX_ATTACHMENT_BYTES * 1.45) + 1_000_000);
+const MAX_AVATAR_BYTES = Number(process.env.MAX_AVATAR_BYTES || 10 * 1024 * 1024);
+const MAX_BANNER_BYTES = Number(process.env.MAX_BANNER_BYTES || 20 * 1024 * 1024);
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 const BACKUP_INTERVAL_MS = 5 * 60_000;
@@ -26,6 +28,7 @@ const ADMIN_PIN = process.env.ADMIN_PIN || "1234";
 const clients = new Set();
 const presence = new Map();
 const voiceSignals = [];
+const typingStates = new Map();
 
 const db = {
   schemaVersion: 2,
@@ -35,6 +38,10 @@ const db = {
   files: {},
   readReceipts: {},
   settings: {},
+  friends: {},
+  friendRequests: [],
+  blockedUsers: {},
+  guilds: {},
   profiles: {},
   roles: {
     admin: { name: "Admin", color: "#f0b232" },
@@ -72,7 +79,6 @@ const mimeTypes = {
   ".csv": "text/csv"
 };
 
-const blockedExtensions = new Set([".bat", ".cmd", ".com", ".cpl", ".exe", ".hta", ".jar", ".js", ".jse", ".lnk", ".msi", ".ps1", ".scr", ".sh", ".vbs", ".wsf"]);
 const allowedMimeTypes = new Set([
   "image/png",
   "image/jpeg",
@@ -186,6 +192,27 @@ function formatBytes(bytes) {
   return `${value} bytes`;
 }
 
+function dataUrlByteLength(dataUrl) {
+  const value = String(dataUrl || "");
+  const commaIndex = value.indexOf(",");
+  if (commaIndex === -1) return 0;
+  const payload = value.slice(commaIndex + 1);
+  if (value.slice(0, commaIndex).includes(";base64")) {
+    return Math.floor(payload.length * 3 / 4);
+  }
+  return Buffer.byteLength(decodeURIComponent(payload));
+}
+
+function limitProfileImage(dataUrl, maxBytes, label) {
+  const value = String(dataUrl || "");
+  if (!value) return "";
+  if (!value.startsWith("data:image/")) throw new Error(`${label} debe ser una imagen valida.`);
+  if (dataUrlByteLength(value) > maxBytes) {
+    throw new Error(`${label} supera el limite permitido de ${formatBytes(maxBytes)}.`);
+  }
+  return value;
+}
+
 function detectMime(buffer) {
   if (buffer.length >= 2 && buffer[0] === 0x4D && buffer[1] === 0x5A) return "application/x-msdownload";
   if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x7F, 0x45, 0x4C, 0x46]))) return "application/x-elf";
@@ -224,9 +251,7 @@ function validateAttachment(fileName, browserMime, buffer) {
   if (detectedMime === "application/zip" && officeOpenXml.has(ext)) detectedMime = officeOpenXml.get(ext);
   if (detectedMime === "application/vnd.ms-office" && officeLegacy.has(ext)) detectedMime = officeLegacy.get(ext);
   if (detectedMime === "text/plain" && ext === ".csv") detectedMime = "text/csv";
-  if (blockedExtensions.has(ext)) throw new Error("Tipo de archivo bloqueado por seguridad.");
-  if (["application/x-msdownload", "application/x-elf"].includes(detectedMime)) throw new Error("El archivo parece ejecutable y fue bloqueado por seguridad.");
-  if (!allowedMimeTypes.has(detectedMime)) throw new Error("Tipo de archivo no permitido.");
+  if (!allowedMimeTypes.has(detectedMime)) detectedMime = "application/octet-stream";
   const browserCompatible = browserMime && (
     browserMime === detectedMime ||
     (browserMime === "application/octet-stream") ||
@@ -309,8 +334,13 @@ function contactFromProfile(id, fallbackName = "Usuario") {
     id,
     name: profile.name,
     status: profile.status,
+    presence: profile.presence,
     color: profile.color,
     avatar: profile.avatar,
+    banner: profile.banner,
+    bio: profile.bio,
+    registeredAt: profile.registeredAt,
+    badges: profile.badges,
     role: profile.role,
     roleName: profile.roleName,
     roleColor: profile.roleColor,
@@ -389,6 +419,10 @@ function migrateDb() {
   db.files = db.files || {};
   db.readReceipts = db.readReceipts || {};
   db.settings = db.settings || {};
+  db.friends = db.friends || {};
+  db.friendRequests = Array.isArray(db.friendRequests) ? db.friendRequests : [];
+  db.blockedUsers = db.blockedUsers || {};
+  db.guilds = db.guilds || {};
   db.roles = db.roles || {};
   db.lockedChannels = db.lockedChannels || {};
   db.invites = Array.isArray(db.invites) ? db.invites : [];
@@ -416,6 +450,7 @@ function migrateDb() {
     if (message.to) upsertContact(message.to, message.to);
     message.reactions = message.reactions || {};
     message.readBy = message.readBy || [];
+    message.attachments = Array.isArray(message.attachments) ? message.attachments : (message.attachment ? [message.attachment] : []);
     if (!message.deletedAt) upsertConversation(message);
   });
 
@@ -468,13 +503,18 @@ function broadcast(event, payload) {
 
 function profileFor(id, fallbackName = "Usuario") {
   const profile = db.profiles[id] || {};
+  const registeredAt = profile.registeredAt || new Date().toISOString();
   return {
     id,
     name: String(profile.name || fallbackName || "Usuario").slice(0, 32),
     status: String(profile.status || "Disponible").slice(0, 80),
-    presence: ["online", "away", "offline"].includes(profile.presence) ? profile.presence : "online",
+    presence: ["online", "away", "dnd", "invisible", "offline"].includes(profile.presence) ? profile.presence : "online",
     color: String(profile.color || "#949cf7").slice(0, 16),
-    avatar: String(profile.avatar || "").slice(0, 120_000),
+    avatar: String(profile.avatar || ""),
+    banner: String(profile.banner || ""),
+    bio: String(profile.bio || "").slice(0, 240),
+    registeredAt,
+    badges: Array.isArray(profile.badges) ? profile.badges.slice(0, 8).map(item => String(item).slice(0, 24)) : [],
     role: String(profile.role || "member").slice(0, 24)
   };
 }
@@ -508,7 +548,7 @@ function updatePresence(id, name, voiceChannel, voiceGuild, presenceState) {
   db.profiles[id] = {
     ...existing,
     name: String(name || existing.name).slice(0, 32),
-    presence: ["online", "away", "offline"].includes(presenceState) ? presenceState : existing.presence
+    presence: ["online", "away", "dnd", "invisible", "offline"].includes(presenceState) ? presenceState : existing.presence
   };
   upsertContact(id, db.profiles[id].name);
   presence.set(id, {
@@ -543,16 +583,23 @@ function addMessage(body) {
   const channel = String(body.channel || "general").trim();
   const type = String(body.type || "channel").trim();
   const to = String(body.to || "").trim();
-  let attachment = null;
-  if (body.attachment && typeof body.attachment === "object") {
-    attachment = normalizeAttachment({
-      name: String(body.attachment.name || "archivo").slice(0, 120),
-      mime: String(body.attachment.mime || "application/octet-stream").slice(0, 120),
-      data: String(body.attachment.data || "")
+  const incomingAttachments = Array.isArray(body.attachments)
+    ? body.attachments
+    : (body.attachment ? [body.attachment] : []);
+  const attachments = [];
+  if (incomingAttachments.length) {
+    incomingAttachments.slice(0, 10).forEach(item => {
+      if (!item || typeof item !== "object") return;
+      const saved = normalizeAttachment({
+        name: String(item.name || "archivo").slice(0, 120),
+        mime: String(item.mime || "application/octet-stream").slice(0, 120),
+        data: String(item.data || "")
+      });
+      if (saved) attachments.push(saved);
     });
   }
 
-  if (!userId || !name || (!text && !attachment)) {
+  if (!userId || !name || (!text && !attachments.length)) {
     return { error: "Usuario y mensaje son obligatorios." };
   }
 
@@ -570,7 +617,8 @@ function addMessage(body) {
     channel: channel.slice(0, 48),
     type: type === "dm" ? "dm" : "channel",
     to: to.slice(0, 80),
-    attachment,
+    attachment: attachments[0] || null,
+    attachments,
     reactions: {},
     profile,
     time: new Date().toISOString()
@@ -784,6 +832,100 @@ function cleanupOrphanFiles() {
   }
 }
 
+function sharedFiles(url) {
+  const conversationId = getConversationIdFromUrl(url);
+  const q = String(url.searchParams.get("q") || "").toLowerCase();
+  return (messagesByConversation.get(conversationId) || [])
+    .filter(message => !message.deletedAt)
+    .flatMap(message => (message.attachments || (message.attachment ? [message.attachment] : [])).map(file => ({
+      ...file,
+      messageId: message.id,
+      userId: message.userId,
+      userName: message.name,
+      conversationId,
+      uploadedAt: file.createdAt || message.time
+    })))
+    .filter(file => !q || `${file.originalName || file.name}`.toLowerCase().includes(q))
+    .sort((left, right) => new Date(right.uploadedAt) - new Date(left.uploadedAt));
+}
+
+function publicGuilds() {
+  return db.guilds || {};
+}
+
+function saveGuild(body) {
+  const id = String(body.id || body.name || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48);
+  if (!id) return { status: 400, error: "Nombre de servidor obligatorio." };
+  const existing = db.guilds[id] || {};
+  db.guilds[id] = {
+    id,
+    name: String(body.name || existing.name || id).slice(0, 40),
+    short: String(body.short || existing.short || id.slice(0, 2)).slice(0, 4).toUpperCase(),
+    topic: String(body.topic || existing.topic || "").slice(0, 120),
+    icon: limitProfileImage(body.icon || existing.icon || "", MAX_AVATAR_BYTES, "El icono"),
+    banner: limitProfileImage(body.banner || existing.banner || "", MAX_BANNER_BYTES, "El banner"),
+    color: String(body.color || existing.color || "#5865f2").slice(0, 16),
+    text: Array.isArray(body.text) ? body.text.slice(0, 50) : (existing.text || ["general"]),
+    voice: Array.isArray(body.voice) ? body.voice.slice(0, 50) : (existing.voice || ["Sala 1"]),
+    roles: existing.roles || {},
+    permissions: existing.permissions || {},
+    updatedAt: new Date().toISOString()
+  };
+  saveDb();
+  broadcast("guilds", publicGuilds());
+  return { status: 200, guild: db.guilds[id] };
+}
+
+function deleteGuild(body) {
+  const id = String(body.id || "");
+  if (!id || id === "mariochat") return { status: 400, error: "No se puede eliminar este servidor." };
+  delete db.guilds[id];
+  saveDb();
+  broadcast("guilds", publicGuilds());
+  return { status: 200, ok: true };
+}
+
+function handleTyping(body) {
+  const userId = String(body.userId || "");
+  const name = String(body.name || "Usuario").slice(0, 32);
+  const conversationId = String(body.conversationId || "");
+  if (!userId || !conversationId) return { status: 400, error: "Typing invalido." };
+  const typing = { userId, name, conversationId, expiresAt: Date.now() + 4000 };
+  typingStates.set(`${conversationId}:${userId}`, typing);
+  broadcast("typing", typing);
+  return { status: 200, ok: true };
+}
+
+function friendsFor(userId) {
+  const friends = db.friends[userId] || [];
+  const blocked = db.blockedUsers[userId] || [];
+  const requests = db.friendRequests.filter(request => request.to === userId || request.from === userId);
+  return {
+    friends: friends.map(id => contactFromProfile(id, id)),
+    blocked: blocked.map(id => contactFromProfile(id, id)),
+    requests
+  };
+}
+
+function handleFriend(body) {
+  const action = String(body.action || "");
+  const from = String(body.from || "");
+  const to = String(body.to || "");
+  if (!from || !to || from === to) return { status: 400, error: "Usuarios invalidos." };
+  db.friends[from] = db.friends[from] || [];
+  db.friends[to] = db.friends[to] || [];
+  db.blockedUsers[from] = db.blockedUsers[from] || [];
+  if (action === "request") db.friendRequests.push({ id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, from, to, createdAt: new Date().toISOString() });
+  if (action === "accept") {
+    db.friendRequests = db.friendRequests.filter(request => !(request.from === to && request.to === from));
+    if (!db.friends[from].includes(to)) db.friends[from].push(to);
+    if (!db.friends[to].includes(from)) db.friends[to].push(from);
+  }
+  if (action === "block") db.blockedUsers[from].push(to);
+  saveDb();
+  return { status: 200, state: friendsFor(from) };
+}
+
 function pruneVoiceSignals() {
   const cutoff = Date.now() - SIGNAL_TTL_MS;
   while (voiceSignals.length && voiceSignals[0].createdAt < cutoff) voiceSignals.shift();
@@ -819,6 +961,8 @@ function publicState() {
     roles: db.roles,
     lockedChannels: db.lockedChannels,
     maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
+    maxAvatarBytes: MAX_AVATAR_BYTES,
+    maxBannerBytes: MAX_BANNER_BYTES,
     allowedMimeTypes: Array.from(allowedMimeTypes).filter(type => type !== "application/octet-stream"),
     turn: process.env.TURN_URL ? {
       urls: process.env.TURN_URL,
@@ -907,6 +1051,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && url.pathname === "/messages") return sendJson(res, 200, filterMessages(url));
   if (req.method === "GET" && url.pathname === "/conversations") return sendJson(res, 200, publicConversations(url.searchParams.get("userId") || ""));
   if (req.method === "GET" && url.pathname === "/contacts") return sendJson(res, 200, Object.values(db.contacts || {}));
+  if (req.method === "GET" && url.pathname === "/guilds") return sendJson(res, 200, publicGuilds());
+  if (req.method === "GET" && url.pathname === "/shared-files") return sendJson(res, 200, sharedFiles(url));
+  if (req.method === "GET" && url.pathname === "/friends") return sendJson(res, 200, friendsFor(url.searchParams.get("userId") || ""));
   if (req.method === "GET" && url.pathname === "/presence") return sendJson(res, 200, activeUsers());
   if (req.method === "GET" && url.pathname === "/state") return sendJson(res, 200, publicState());
 
@@ -950,9 +1097,13 @@ const server = http.createServer(async (req, res) => {
         ...profile,
         name: String(body.name || profile.name).slice(0, 32),
         status: String(body.status || profile.status).slice(0, 80),
-        presence: ["online", "away", "offline"].includes(body.presence) ? body.presence : profile.presence,
+        presence: ["online", "away", "dnd", "invisible", "offline"].includes(body.presence) ? body.presence : profile.presence,
         color: String(body.color || profile.color).slice(0, 16),
-        avatar: String(body.avatar || profile.avatar).slice(0, 120_000)
+        avatar: limitProfileImage(body.avatar || profile.avatar, MAX_AVATAR_BYTES, "La imagen"),
+        banner: limitProfileImage(body.banner || profile.banner, MAX_BANNER_BYTES, "El banner"),
+        bio: String(body.bio || profile.bio).slice(0, 240),
+        registeredAt: profile.registeredAt || new Date().toISOString(),
+        badges: Array.isArray(body.badges) ? body.badges.slice(0, 8) : profile.badges
       };
       upsertContact(id, db.profiles[id].name);
       saveDb();
@@ -968,6 +1119,42 @@ const server = http.createServer(async (req, res) => {
       const result = addMessage(JSON.parse(await readBody(req)));
       if (result.error) return sendJson(res, 400, { error: result.error });
       return sendJson(res, 201, result.message);
+    } catch (error) {
+      return sendJson(res, 400, { error: error.message || "Solicitud invalida." });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/guilds") {
+    try {
+      const result = saveGuild(JSON.parse(await readBody(req)));
+      return sendJson(res, result.status, result.error ? { error: result.error } : result.guild);
+    } catch (error) {
+      return sendJson(res, 400, { error: error.message || "Solicitud invalida." });
+    }
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/guilds") {
+    try {
+      const result = deleteGuild(JSON.parse(await readBody(req)));
+      return sendJson(res, result.status, result.error ? { error: result.error } : { ok: true });
+    } catch (error) {
+      return sendJson(res, 400, { error: error.message || "Solicitud invalida." });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/typing") {
+    try {
+      const result = handleTyping(JSON.parse(await readBody(req)));
+      return sendJson(res, result.status, result.error ? { error: result.error } : { ok: true });
+    } catch (error) {
+      return sendJson(res, 400, { error: error.message || "Solicitud invalida." });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/friends") {
+    try {
+      const result = handleFriend(JSON.parse(await readBody(req)));
+      return sendJson(res, result.status, result.error ? { error: result.error } : result.state);
     } catch (error) {
       return sendJson(res, 400, { error: error.message || "Solicitud invalida." });
     }

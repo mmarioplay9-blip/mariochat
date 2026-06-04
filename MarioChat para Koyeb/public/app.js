@@ -18,7 +18,10 @@ const guildMenuButton = document.querySelector("#guildMenuButton");
 const inviteButton = document.querySelector("#inviteButton");
 const exportJsonButton = document.querySelector("#exportJsonButton");
 const exportTxtButton = document.querySelector("#exportTxtButton");
+const sharedFilesButton = document.querySelector("#sharedFilesButton");
 const toggleMembersButton = document.querySelector("#toggleMembersButton");
+const dmSearchInput = document.querySelector("#dmSearchInput");
+const directMessages = document.querySelector("#directMessages");
 const searchInput = document.querySelector("#searchInput");
 const searchOptionsButton = document.querySelector("#searchOptionsButton");
 const searchPanel = document.querySelector("#searchPanel");
@@ -27,6 +30,7 @@ const searchFromInput = document.querySelector("#searchFromInput");
 const searchToInput = document.querySelector("#searchToInput");
 const clearSearchButton = document.querySelector("#clearSearchButton");
 const loadMoreButton = document.querySelector("#loadMoreButton");
+const typingIndicator = document.querySelector("#typingIndicator");
 const emojiButton = document.querySelector("#emojiButton");
 const muteButton = document.querySelector("#muteButton");
 const deafenButton = document.querySelector("#deafenButton");
@@ -52,12 +56,33 @@ const settingsPresenceInput = document.querySelector("#settingsPresenceInput");
 const settingsThemeInput = document.querySelector("#settingsThemeInput");
 const settingsColorInput = document.querySelector("#settingsColorInput");
 const settingsAvatarInput = document.querySelector("#settingsAvatarInput");
+const settingsBannerInput = document.querySelector("#settingsBannerInput");
+const settingsAvatarSize = document.querySelector("#settingsAvatarSize");
+const settingsBannerSize = document.querySelector("#settingsBannerSize");
+const settingsBioInput = document.querySelector("#settingsBioInput");
+const filesDialog = document.querySelector("#filesDialog");
+const fileSearchInput = document.querySelector("#fileSearchInput");
+const sharedFilesList = document.querySelector("#sharedFilesList");
+const dropOverlay = document.querySelector("#dropOverlay");
 const adminDialog = document.querySelector("#adminDialog");
 const adminPinInput = document.querySelector("#adminPinInput");
 const adminUserInput = document.querySelector("#adminUserInput");
 const adminRoleInput = document.querySelector("#adminRoleInput");
 const saveRoleButton = document.querySelector("#saveRoleButton");
 const toggleLockButton = document.querySelector("#toggleLockButton");
+
+const API_BASE = window.location.protocol === "file:" ? "http://localhost:3000" : "";
+const nativeFetch = window.fetch.bind(window);
+
+function apiUrl(path) {
+  if (!path || typeof path !== "string" || path.startsWith("http") || path.startsWith("data:") || path.startsWith("#")) return path;
+  return path.startsWith("/") ? `${API_BASE}${path}` : path;
+}
+
+window.fetch = (input, init) => {
+  if (typeof input === "string") return nativeFetch(apiUrl(input), init);
+  return nativeFetch(input, init);
+};
 
 const guilds = {
   mariochat: {
@@ -103,7 +128,9 @@ let historyCursor = "";
 let hasMoreHistory = false;
 let activeConversationId = "";
 let editingMessageId = "";
-let pendingAttachment = null;
+let pendingAttachments = [];
+let dmPins = JSON.parse(localStorage.getItem("dmPins") || "[]");
+let typingTimeout = 0;
 let appState = { roles: {}, lockedChannels: {}, turn: null };
 let profile = {
   name: savedName || "Usuario",
@@ -111,6 +138,8 @@ let profile = {
   presence: localStorage.getItem("profilePresence") || "online",
   color: localStorage.getItem("profileColor") || "#949cf7",
   avatar: localStorage.getItem("profileAvatar") || "",
+  banner: localStorage.getItem("profileBanner") || "",
+  bio: localStorage.getItem("profileBio") || "",
   theme: localStorage.getItem("theme") || "dark",
   role: "member"
 };
@@ -209,6 +238,22 @@ function formatBytes(bytes) {
   return `${value} bytes`;
 }
 
+function fileIcon(file) {
+  const name = `${file.originalName || file.name || ""}`.toLowerCase();
+  const mime = file.mime || "";
+  if (mime.startsWith("image/")) return "IMG";
+  if (mime.startsWith("video/")) return "VID";
+  if (mime.startsWith("audio/")) return "AUD";
+  if (mime.includes("pdf")) return "PDF";
+  if (/\.(zip|rar|7z|tar|gz)$/i.test(name)) return "ZIP";
+  if (/\.(doc|docx)$/i.test(name)) return "DOC";
+  if (/\.(xls|xlsx|csv)$/i.test(name)) return "XLS";
+  if (/\.(ppt|pptx)$/i.test(name)) return "PPT";
+  if (/\.(js|html|css|py|java|json|ts|jsx|tsx)$/i.test(name)) return "CODE";
+  if (/\.(exe|msi|apk|app|dmg)$/i.test(name)) return "APP";
+  return "FILE";
+}
+
 function setUploadProgress(percent, label = "") {
   const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
   uploadProgress.hidden = false;
@@ -228,6 +273,69 @@ function lastMessageForChannel(channel) {
     channel
   }));
   return conversation?.lastMessage?.text || "";
+}
+
+function dmPeerFromConversation(conversation) {
+  const peerId = (conversation.participants || []).find(id => id !== userId) || "";
+  const contact = latestUsers.find(user => user.id === peerId) || {};
+  return {
+    id: peerId,
+    name: contact.name || conversation.lastMessage?.name || peerId || "Usuario",
+    status: contact.status || "Disponible",
+    presence: contact.presence || "offline",
+    avatar: contact.avatar || ""
+  };
+}
+
+function renderDirectMessages() {
+  const query = dmSearchInput.value.trim().toLowerCase();
+  const dms = conversations
+    .filter(conversation => conversation.type === "dm")
+    .map(conversation => ({ conversation, peer: dmPeerFromConversation(conversation) }))
+    .filter(item => !query || item.peer.name.toLowerCase().includes(query) || item.conversation.lastMessage?.text?.toLowerCase().includes(query))
+    .sort((left, right) => {
+      const pinnedDelta = Number(dmPins.includes(right.conversation.id)) - Number(dmPins.includes(left.conversation.id));
+      if (pinnedDelta) return pinnedDelta;
+      return new Date(right.conversation.updatedAt || 0) - new Date(left.conversation.updatedAt || 0);
+    });
+
+  directMessages.replaceChildren();
+  dms.forEach(({ conversation, peer }) => {
+    const button = document.createElement("button");
+    button.className = "dm-item";
+    button.type = "button";
+    button.dataset.peerId = peer.id;
+    button.dataset.peerName = peer.name;
+
+    const avatar = document.createElement("div");
+    avatar.className = `avatar small ${peer.presence}`;
+    if (peer.avatar) {
+      const image = document.createElement("img");
+      image.src = peer.avatar;
+      image.alt = peer.name;
+      avatar.append(image);
+    } else {
+      avatar.textContent = initials(peer.name);
+    }
+
+    const details = document.createElement("span");
+    details.className = "dm-details";
+    details.innerHTML = `<strong></strong><small></small>`;
+    details.querySelector("strong").textContent = peer.name;
+    details.querySelector("small").textContent = conversation.lastMessage?.text || peer.status || "";
+
+    const unread = document.createElement("span");
+    unread.className = "unread-badge";
+    unread.hidden = !conversation.unreadCount;
+    unread.textContent = String(conversation.unreadCount || "");
+
+    const pin = document.createElement("span");
+    pin.className = "dm-pin";
+    pin.textContent = dmPins.includes(conversation.id) ? "pin" : "";
+
+    button.append(avatar, details, unread, pin);
+    directMessages.append(button);
+  });
 }
 
 function updateProfile() {
@@ -290,7 +398,9 @@ function renderMembers(users) {
     if (user.voiceChannel && user.voiceGuild === currentGuild) {
       status.textContent = `Voz: ${user.voiceChannel}`;
     } else {
-      const presenceLabel = user.presence === "away" ? "Ausente" : user.presence === "offline" ? "Desconectado" : "En linea";
+      const presenceLabel = user.presence === "away" ? "Ausente" :
+        user.presence === "dnd" ? "No molestar" :
+          user.presence === "invisible" || user.presence === "offline" ? "Desconectado" : "En linea";
       status.textContent = user.id === userId ? `Tu cuenta - ${presenceLabel}` : (user.status || presenceLabel);
     }
 
@@ -397,36 +507,40 @@ function renderMessage(message) {
 
   meta.append(name, time);
   item.append(avatar, meta, text);
-  if (message.attachment) {
+  const attachments = message.attachments?.length ? message.attachments : (message.attachment ? [message.attachment] : []);
+  attachments.forEach(file => {
     const attachment = document.createElement("div");
     attachment.className = "message-attachment";
-    const source = message.attachment.url || message.attachment.data || "";
-    const fileName = message.attachment.originalName || message.attachment.name || "archivo";
+    const source = apiUrl(file.url || file.data || "");
+    const fileName = file.originalName || file.name || "archivo";
+    const fileMeta = document.createElement("a");
+    fileMeta.className = "file-card";
+    fileMeta.href = source || "#";
+    fileMeta.download = fileName;
+    fileMeta.innerHTML = `<span class="file-icon"></span><span class="file-info"><strong></strong><small></small></span>`;
+    fileMeta.querySelector(".file-icon").textContent = fileIcon(file);
+    fileMeta.querySelector("strong").textContent = fileName;
+    fileMeta.querySelector("small").textContent = `${formatBytes(file.size || 0)} · ${file.createdAt ? new Date(file.createdAt).toLocaleDateString("es") : "archivo"}`;
+    attachment.append(fileMeta);
 
-    if (source && message.attachment.mime?.startsWith("image/")) {
+    if (source && file.mime?.startsWith("image/")) {
       const image = document.createElement("img");
       image.src = source;
       image.alt = fileName;
       attachment.append(image);
-    } else if (source && message.attachment.mime?.startsWith("video/")) {
+    } else if (source && file.mime?.startsWith("video/")) {
       const video = document.createElement("video");
       video.src = source;
       video.controls = true;
       attachment.append(video);
-    } else if (source && message.attachment.mime?.startsWith("audio/")) {
+    } else if (source && file.mime?.startsWith("audio/")) {
       const audio = document.createElement("audio");
       audio.src = source;
       audio.controls = true;
       attachment.append(audio);
-    } else {
-      const link = document.createElement("a");
-      link.href = source || "#";
-      link.download = fileName;
-      link.textContent = fileName;
-      attachment.append(link);
     }
     item.append(attachment);
-  }
+  });
 
   const actions = document.createElement("div");
   actions.className = "message-actions";
@@ -544,6 +658,7 @@ function mergeMessages(nextMessages) {
 function applyConversations(nextConversations) {
   conversations = Array.isArray(nextConversations) ? nextConversations : [];
   renderChannels();
+  renderDirectMessages();
 }
 
 async function loadMessages(options = {}) {
@@ -753,10 +868,61 @@ function readFileAsDataUrl(file, onProgress = () => {}) {
   });
 }
 
+function loadImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = dataUrl;
+  });
+}
+
+function dataUrlSize(dataUrl) {
+  const payload = String(dataUrl || "").split(",")[1] || "";
+  return Math.floor(payload.length * 3 / 4);
+}
+
+async function compressImageToLimit(file, maxBytes) {
+  const source = await readFileAsDataUrl(file);
+  const image = await loadImage(source);
+  let scale = 1;
+  let quality = 0.92;
+  let best = source;
+
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    const context = canvas.getContext("2d");
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const next = canvas.toDataURL("image/jpeg", quality);
+    best = next;
+    if (dataUrlSize(next) <= maxBytes) return next;
+    if (quality > 0.72) {
+      quality -= 0.08;
+    } else {
+      scale *= 0.82;
+      quality = 0.88;
+    }
+  }
+
+  if (dataUrlSize(best) <= maxBytes) return best;
+  throw new Error(`No se pudo reducir la imagen por debajo de ${formatBytes(maxBytes)}.`);
+}
+
+async function imageFileToProfileDataUrl(file, maxBytes, label) {
+  if (!file) return "";
+  if (!file.type.startsWith("image/")) throw new Error(`${label} debe ser una imagen.`);
+  if (file.size <= maxBytes) return readFileAsDataUrl(file);
+  const shouldCompress = window.confirm(`${label} supera el límite permitido de ${formatBytes(maxBytes)}. ¿Quieres reducirla automaticamente?`);
+  if (!shouldCompress) throw new Error(`${label} supera el límite permitido de ${formatBytes(maxBytes)}.`);
+  return compressImageToLimit(file, maxBytes);
+}
+
 function requestJson(method, url, payload, onUploadProgress = () => {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open(method, url);
+    xhr.open(method, apiUrl(url));
     xhr.setRequestHeader("Content-Type", "application/json");
     xhr.upload.onprogress = event => {
       if (event.lengthComputable) onUploadProgress((event.loaded / event.total) * 100);
@@ -769,7 +935,7 @@ function requestJson(method, url, payload, onUploadProgress = () => {}) {
         reject(new Error(body?.error || "No se pudo completar la solicitud."));
       }
     };
-    xhr.onerror = () => reject(new Error("Error de red durante la subida."));
+    xhr.onerror = () => reject(new Error(API_BASE ? "No se pudo conectar con el servidor local. Abre MarioChat con Abrir Chat.bat o ejecuta npm start." : "Error de red durante la subida."));
     xhr.send(JSON.stringify(payload));
   });
 }
@@ -960,7 +1126,7 @@ async function loadPresence() {
 }
 
 function connectEvents() {
-  const events = new EventSource(`/events?userId=${encodeURIComponent(userId)}`);
+  const events = new EventSource(apiUrl(`/events?userId=${encodeURIComponent(userId)}`));
 
   events.addEventListener("open", () => setConnected(true));
   events.addEventListener("error", () => setConnected(false));
@@ -1015,6 +1181,16 @@ function connectEvents() {
 
   events.addEventListener("read-receipt", () => {
     loadConversations();
+  });
+
+  events.addEventListener("typing", event => {
+    const typing = JSON.parse(event.data);
+    if (typing.userId === userId || typing.conversationId !== currentConversationId()) return;
+    typingIndicator.textContent = `${typing.name} esta escribiendo...`;
+    typingIndicator.hidden = false;
+    window.setTimeout(() => {
+      typingIndicator.hidden = true;
+    }, 3500);
   });
 
   events.addEventListener("presence", event => {
@@ -1111,23 +1287,51 @@ attachButton.addEventListener("click", () => {
   fileInput.click();
 });
 
-fileInput.addEventListener("change", async () => {
-  const file = fileInput.files?.[0];
-  if (!file) return;
+async function addPendingFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
   const maxFileSize = appState.maxAttachmentBytes || 100 * 1024 * 1024;
-  if (file.size > maxFileSize) {
-    window.alert(`El archivo es muy grande. Limite actual: ${formatBytes(maxFileSize)}.`);
-    fileInput.value = "";
+  const tooLarge = files.find(file => file.size > maxFileSize);
+  if (tooLarge) {
+    window.alert(`${tooLarge.name} es demasiado grande. Limite actual: ${formatBytes(maxFileSize)}.`);
     return;
   }
-  setUploadProgress(0, "Preparando");
-  pendingAttachment = {
-    name: file.name,
-    mime: file.type,
-    data: await readFileAsDataUrl(file, percent => setUploadProgress(percent, `Preparando ${Math.round(percent)}%`))
-  };
+
+  pendingAttachments = [];
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    setUploadProgress(0, `Preparando ${index + 1}/${files.length}`);
+    pendingAttachments.push({
+      name: file.name,
+      mime: file.type,
+      data: await readFileAsDataUrl(file, percent => setUploadProgress(percent, `Preparando ${index + 1}/${files.length} ${Math.round(percent)}%`))
+    });
+  }
   resetUploadProgress();
-  messageInput.placeholder = `Archivo listo: ${file.name}`;
+  messageInput.placeholder = pendingAttachments.length === 1
+    ? `Archivo listo: ${pendingAttachments[0].name}`
+    : `${pendingAttachments.length} archivos listos`;
+}
+
+fileInput.addEventListener("change", async () => {
+  await addPendingFiles(fileInput.files);
+});
+
+["dragenter", "dragover"].forEach(type => {
+  document.addEventListener(type, event => {
+    event.preventDefault();
+    if (event.dataTransfer?.types?.includes("Files")) dropOverlay.hidden = false;
+  });
+});
+
+["dragleave", "drop"].forEach(type => {
+  document.addEventListener(type, event => {
+    event.preventDefault();
+    if (type === "drop" && event.dataTransfer?.files?.length) {
+      addPendingFiles(event.dataTransfer.files);
+    }
+    dropOverlay.hidden = true;
+  });
 });
 
 function exportCurrentConversation(format) {
@@ -1136,11 +1340,62 @@ function exportCurrentConversation(format) {
       ? { format, type: "dm", userId, peerId: dmPeer.id }
       : { format, type: "channel", guild: currentGuild, channel: currentChannel }
   );
-  window.location.href = `/export?${params.toString()}`;
+  window.location.href = apiUrl(`/export?${params.toString()}`);
 }
 
 exportJsonButton.addEventListener("click", () => exportCurrentConversation("json"));
 exportTxtButton.addEventListener("click", () => exportCurrentConversation("txt"));
+
+async function loadSharedFiles() {
+  const params = new URLSearchParams(
+    currentMode === "dm" && dmPeer
+      ? { type: "dm", userId, peerId: dmPeer.id, q: fileSearchInput.value.trim() }
+      : { type: "channel", guild: currentGuild, channel: currentChannel, q: fileSearchInput.value.trim() }
+  );
+  const response = await fetch(`/shared-files?${params.toString()}`, { cache: "no-store" }).catch(() => null);
+  if (!response?.ok) return;
+  const files = await response.json();
+  sharedFilesList.replaceChildren();
+  if (!files.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "No hay archivos compartidos.";
+    sharedFilesList.append(empty);
+    return;
+  }
+  files.forEach(file => {
+    const link = document.createElement("a");
+    link.className = "shared-file";
+    link.href = apiUrl(file.url);
+    link.download = file.originalName || file.name;
+    link.innerHTML = `<span class="file-icon"></span><span><strong></strong><small></small></span>`;
+    link.querySelector(".file-icon").textContent = fileIcon(file);
+    link.querySelector("strong").textContent = file.originalName || file.name;
+    link.querySelector("small").textContent = `${formatBytes(file.size || 0)} · ${file.userName || "Usuario"} · ${new Date(file.uploadedAt).toLocaleDateString("es")}`;
+    sharedFilesList.append(link);
+  });
+}
+
+sharedFilesButton.addEventListener("click", () => {
+  filesDialog.showModal();
+  loadSharedFiles();
+});
+
+fileSearchInput.addEventListener("input", debounce(loadSharedFiles, 250));
+
+function updateProfileImageSizeLabels() {
+  const avatarFile = settingsAvatarInput.files?.[0];
+  const bannerFile = settingsBannerInput.files?.[0];
+  settingsAvatarSize.textContent = avatarFile
+    ? `${avatarFile.name} · ${formatBytes(avatarFile.size)} / limite ${formatBytes(appState.maxAvatarBytes || 10 * 1024 * 1024)}`
+    : `Limite ${formatBytes(appState.maxAvatarBytes || 10 * 1024 * 1024)}`;
+  settingsBannerSize.textContent = bannerFile
+    ? `${bannerFile.name} · ${formatBytes(bannerFile.size)} / limite ${formatBytes(appState.maxBannerBytes || 20 * 1024 * 1024)}`
+    : `Limite ${formatBytes(appState.maxBannerBytes || 20 * 1024 * 1024)}`;
+}
+
+settingsAvatarInput.addEventListener("change", updateProfileImageSizeLabels);
+settingsBannerInput.addEventListener("change", updateProfileImageSizeLabels);
 
 emojiButton.addEventListener("click", () => {
   const insert = " :)";
@@ -1172,38 +1427,53 @@ settingsButton.addEventListener("click", () => {
   settingsNameInput.value = displayName();
   settingsStatusInput.value = profile.status;
   settingsPresenceInput.value = profile.presence;
+  settingsBioInput.value = profile.bio;
   settingsColorInput.value = profile.color;
   settingsThemeInput.value = profile.theme;
+  updateProfileImageSizeLabels();
   settingsDialog.showModal();
 });
 
 saveSettingsButton.addEventListener("click", async () => {
-  const avatarFile = settingsAvatarInput.files?.[0];
-  if (avatarFile) {
-    if (avatarFile.size > 120_000) {
-      window.alert("La foto de perfil debe ser menor de 120 KB.");
-      return;
+  try {
+    const avatarFile = settingsAvatarInput.files?.[0];
+    const bannerFile = settingsBannerInput.files?.[0];
+    if (avatarFile) {
+      profile.avatar = await imageFileToProfileDataUrl(avatarFile, appState.maxAvatarBytes || 10 * 1024 * 1024, "La imagen");
+      localStorage.setItem("profileAvatar", profile.avatar);
     }
-    profile.avatar = await readFileAsDataUrl(avatarFile);
-    localStorage.setItem("profileAvatar", profile.avatar);
+    if (bannerFile) {
+      profile.banner = await imageFileToProfileDataUrl(bannerFile, appState.maxBannerBytes || 20 * 1024 * 1024, "El banner");
+      localStorage.setItem("profileBanner", profile.banner);
+    }
+  } catch (error) {
+    window.alert(error.message || "No se pudo procesar la imagen.");
+    return;
   }
   nameInput.value = settingsNameInput.value.trim();
   profile.name = displayName();
   profile.status = settingsStatusInput.value.trim() || "Disponible";
   profile.presence = settingsPresenceInput.value || "online";
+  profile.bio = settingsBioInput.value.trim();
   profile.color = settingsColorInput.value || "#949cf7";
   profile.theme = settingsThemeInput.value || "dark";
   localStorage.setItem("chatName", currentName());
   localStorage.setItem("profileStatus", profile.status);
   localStorage.setItem("profilePresence", profile.presence);
+  localStorage.setItem("profileBio", profile.bio);
   localStorage.setItem("profileColor", profile.color);
   applyTheme(profile.theme);
   updateProfile();
-  await fetch("/profile", {
+  const response = await fetch("/profile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: userId, ...profile })
   }).catch(() => {});
+  if (response && !response.ok) {
+    const result = await response.json().catch(() => ({}));
+    window.alert(result.error || "No se pudo guardar el perfil.");
+    return;
+  }
   sendPresence();
 });
 
@@ -1242,6 +1512,51 @@ textChannels.addEventListener("click", event => {
   if (!button) return;
   setCurrentChannel(button.dataset.channel);
 });
+
+textChannels.addEventListener("contextmenu", event => {
+  const button = event.target.closest(".channel[data-type='text']");
+  if (!button) return;
+  event.preventDefault();
+  const action = window.prompt("Canal: escribir 'editar' o 'eliminar'");
+  const guild = guilds[currentGuild];
+  if (!guild) return;
+  if (action === "editar") {
+    const nextName = window.prompt("Nuevo nombre del canal", button.dataset.channel);
+    if (!nextName) return;
+    guild.text = guild.text.map(channel => channel === button.dataset.channel ? nextName.trim().slice(0, 24) : channel);
+    persistCustomGuilds();
+    renderChannels();
+  }
+  if (action === "eliminar" && window.confirm("Eliminar canal?")) {
+    guild.text = guild.text.filter(channel => channel !== button.dataset.channel);
+    persistCustomGuilds();
+    if (currentChannel === button.dataset.channel) currentChannel = guild.text[0] || "general";
+    renderChannels();
+    setCurrentChannel(currentChannel);
+  }
+});
+
+directMessages.addEventListener("click", event => {
+  const item = event.target.closest(".dm-item");
+  if (!item) return;
+  openDirectMessage({ id: item.dataset.peerId, name: item.dataset.peerName });
+});
+
+directMessages.addEventListener("contextmenu", event => {
+  const item = event.target.closest(".dm-item");
+  if (!item) return;
+  event.preventDefault();
+  const conversationId = conversationKeyFor("dm", { peerId: item.dataset.peerId });
+  if (dmPins.includes(conversationId)) {
+    dmPins = dmPins.filter(id => id !== conversationId);
+  } else {
+    dmPins.push(conversationId);
+  }
+  localStorage.setItem("dmPins", JSON.stringify(dmPins));
+  renderDirectMessages();
+});
+
+dmSearchInput.addEventListener("input", renderDirectMessages);
 
 members.addEventListener("click", event => {
   const item = event.target.closest(".member");
@@ -1310,7 +1625,7 @@ window.addEventListener("beforeunload", () => {
     voiceChannel: "",
     voiceGuild: ""
   });
-  navigator.sendBeacon?.("/presence", new Blob([payload], { type: "application/json" }));
+  navigator.sendBeacon?.(apiUrl("/presence"), new Blob([payload], { type: "application/json" }));
 });
 
 nameInput.addEventListener("input", () => {
@@ -1326,6 +1641,14 @@ nameInput.addEventListener("input", () => {
 messageInput.addEventListener("input", () => {
   messageInput.style.height = "auto";
   messageInput.style.height = `${messageInput.scrollHeight}px`;
+  window.clearTimeout(typingTimeout);
+  typingTimeout = window.setTimeout(() => {
+    fetch("/typing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, name: displayName(), conversationId: currentConversationId() })
+    }).catch(() => {});
+  }, 180);
 });
 
 messageInput.addEventListener("keydown", event => {
@@ -1344,13 +1667,13 @@ messageForm.addEventListener("submit", async event => {
     nameInput.focus();
     return;
   }
-  if (!text && !pendingAttachment) return;
+  if (!text && !pendingAttachments.length) return;
 
   const submitButton = messageForm.querySelector(".send-button");
   submitButton.disabled = true;
 
   try {
-    if (pendingAttachment) setUploadProgress(0, "Subiendo 0%");
+    if (pendingAttachments.length) setUploadProgress(0, "Subiendo 0%");
     const result = await requestJson(editingMessageId ? "PUT" : "POST", "/messages", editingMessageId ? {
         messageId: editingMessageId,
         userId,
@@ -1363,7 +1686,8 @@ messageForm.addEventListener("submit", async event => {
         to: dmPeer?.id || "",
         guild: currentGuild,
         channel: currentChannel,
-        attachment: pendingAttachment
+        attachment: pendingAttachments[0] || null,
+        attachments: pendingAttachments
       }, percent => setUploadProgress(percent, `Subiendo ${Math.round(percent)}%`));
 
     if (editingMessageId) {
@@ -1373,7 +1697,7 @@ messageForm.addEventListener("submit", async event => {
 
     messageInput.value = "";
     editingMessageId = "";
-    pendingAttachment = null;
+    pendingAttachments = [];
     fileInput.value = "";
     messageInput.placeholder = currentMode === "dm" && dmPeer
       ? `Enviar mensaje privado a ${dmPeer.name}`

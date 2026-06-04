@@ -201,6 +201,69 @@ p {
   padding: 16px 8px 0;
 }
 
+.dm-group {
+  min-height: 0;
+  padding: 16px 8px 0;
+}
+
+.dm-search {
+  display: block;
+  margin: 4px 8px 8px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: #1e1f22;
+}
+
+.dm-search input {
+  height: 30px;
+  font-size: 12px;
+}
+
+.dm-item {
+  width: 100%;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.dm-item:hover {
+  background: var(--hover);
+  color: #fff;
+}
+
+.dm-details {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.dm-details strong,
+.dm-details small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dm-details strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.dm-details small,
+.dm-pin {
+  color: var(--quiet);
+  font-size: 11px;
+}
+
 .group-title {
   height: 24px;
   display: grid;
@@ -391,6 +454,14 @@ p {
 }
 
 .avatar.offline::after {
+  background: #747b86;
+}
+
+.avatar.dnd::after {
+  background: var(--danger);
+}
+
+.avatar.invisible::after {
   background: #747b86;
 }
 
@@ -731,6 +802,85 @@ select {
   background: #1e1f22;
   text-decoration: none;
   overflow-wrap: anywhere;
+}
+
+.file-card,
+.shared-file {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  color: var(--text);
+  text-decoration: none;
+  background: #1e1f22;
+}
+
+.file-icon {
+  min-width: 42px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.file-info,
+.shared-file span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.file-info strong,
+.shared-file strong,
+.file-info small,
+.shared-file small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-info small,
+.shared-file small {
+  color: var(--quiet);
+  font-size: 12px;
+}
+
+.shared-files-list {
+  max-height: 420px;
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+}
+
+.typing-indicator {
+  min-height: 24px;
+  padding: 0 16px 8px 72px;
+  color: var(--quiet);
+  font-size: 12px;
+}
+
+.drop-overlay {
+  position: fixed;
+  inset: 16px;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--brand);
+  border-radius: 12px;
+  background: rgba(49, 51, 56, 0.84);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.drop-overlay[hidden] {
+  display: none;
 }
 
 .message-actions {
