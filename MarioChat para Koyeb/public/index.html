@@ -72,11 +72,14 @@
           <p id="channelTopic">Chat local en tiempo real</p>
           <div class="topbar-actions" aria-label="Acciones">
             <button class="topbar-button" id="inviteButton" type="button" title="Copiar invitacion" aria-label="Copiar invitacion">Invitar</button>
+            <button class="topbar-button" id="exportJsonButton" type="button" title="Exportar conversacion JSON" aria-label="Exportar conversacion JSON">JSON</button>
+            <button class="topbar-button" id="exportTxtButton" type="button" title="Exportar conversacion TXT" aria-label="Exportar conversacion TXT">TXT</button>
             <button class="icon-button" id="toggleMembersButton" type="button" title="Mostrar miembros" aria-label="Mostrar miembros">M</button>
             <label class="search-box" aria-label="Buscar mensajes">
               <span aria-hidden="true">?</span>
               <input id="searchInput" type="search" placeholder="Buscar">
             </label>
+            <button class="topbar-button" id="searchOptionsButton" type="button" title="Filtros de busqueda" aria-label="Filtros de busqueda">Filtros</button>
             <span id="connectionStatus">Conectando...</span>
             <span class="status-dot" aria-hidden="true"></span>
           </div>
@@ -84,14 +87,25 @@
 
         <div class="chat-layout">
           <section class="message-column" aria-label="Mensajes">
+            <div class="search-panel" id="searchPanel" hidden>
+              <input id="searchUserInput" placeholder="Usuario">
+              <input id="searchFromInput" type="date" aria-label="Desde">
+              <input id="searchToInput" type="date" aria-label="Hasta">
+              <button class="topbar-button" id="clearSearchButton" type="button">Limpiar</button>
+            </div>
+            <button class="load-more" id="loadMoreButton" type="button" hidden>Cargar mensajes anteriores</button>
             <ol id="messages" class="messages" aria-live="polite"></ol>
 
             <form id="messageForm" class="composer" aria-label="Enviar mensaje">
               <button class="composer-icon" id="attachButton" type="button" aria-label="Agregar archivo" title="Agregar archivo">+</button>
-              <input id="fileInput" type="file" accept="image/*" hidden>
+              <input id="fileInput" type="file" hidden>
               <textarea id="messageInput" maxlength="500" rows="1" placeholder="Enviar mensaje a #general"></textarea>
               <button class="emoji-button" id="emojiButton" type="button" aria-label="Insertar emoji" title="Insertar emoji">:)</button>
               <button class="send-button" type="submit" aria-label="Enviar mensaje" title="Enviar">Enviar</button>
+              <div class="upload-progress" id="uploadProgress" hidden>
+                <div class="upload-progress-bar" id="uploadProgressBar"></div>
+                <span id="uploadProgressText">0%</span>
+              </div>
             </form>
           </section>
 
@@ -115,7 +129,19 @@
         </label>
         <label class="settings-field">
           <span>Estado</span>
+          <select id="settingsPresenceInput">
+            <option value="online">En linea</option>
+            <option value="away">Ausente</option>
+            <option value="offline">Desconectado</option>
+          </select>
           <input id="settingsStatusInput" maxlength="80" placeholder="Disponible">
+        </label>
+        <label class="settings-field">
+          <span>Tema</span>
+          <select id="settingsThemeInput">
+            <option value="dark">Oscuro</option>
+            <option value="light">Claro</option>
+          </select>
         </label>
         <label class="settings-field">
           <span>Color</span>

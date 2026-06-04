@@ -16,8 +16,17 @@ const addTextChannelButton = document.querySelector("#addTextChannelButton");
 const addVoiceChannelButton = document.querySelector("#addVoiceChannelButton");
 const guildMenuButton = document.querySelector("#guildMenuButton");
 const inviteButton = document.querySelector("#inviteButton");
+const exportJsonButton = document.querySelector("#exportJsonButton");
+const exportTxtButton = document.querySelector("#exportTxtButton");
 const toggleMembersButton = document.querySelector("#toggleMembersButton");
 const searchInput = document.querySelector("#searchInput");
+const searchOptionsButton = document.querySelector("#searchOptionsButton");
+const searchPanel = document.querySelector("#searchPanel");
+const searchUserInput = document.querySelector("#searchUserInput");
+const searchFromInput = document.querySelector("#searchFromInput");
+const searchToInput = document.querySelector("#searchToInput");
+const clearSearchButton = document.querySelector("#clearSearchButton");
+const loadMoreButton = document.querySelector("#loadMoreButton");
 const emojiButton = document.querySelector("#emojiButton");
 const muteButton = document.querySelector("#muteButton");
 const deafenButton = document.querySelector("#deafenButton");
@@ -35,7 +44,12 @@ const leaveVoiceButton = document.querySelector("#leaveVoiceButton");
 const remoteAudio = document.querySelector("#remoteAudio");
 const attachButton = document.querySelector("#attachButton");
 const fileInput = document.querySelector("#fileInput");
+const uploadProgress = document.querySelector("#uploadProgress");
+const uploadProgressBar = document.querySelector("#uploadProgressBar");
+const uploadProgressText = document.querySelector("#uploadProgressText");
 const settingsStatusInput = document.querySelector("#settingsStatusInput");
+const settingsPresenceInput = document.querySelector("#settingsPresenceInput");
+const settingsThemeInput = document.querySelector("#settingsThemeInput");
 const settingsColorInput = document.querySelector("#settingsColorInput");
 const settingsAvatarInput = document.querySelector("#settingsAvatarInput");
 const adminDialog = document.querySelector("#adminDialog");
@@ -83,14 +97,21 @@ let currentChannel = localStorage.getItem("currentChannel") || "general";
 let currentMode = "channel";
 let dmPeer = null;
 let messageHistory = [];
+let conversations = [];
 let isLoadingHistory = false;
+let historyCursor = "";
+let hasMoreHistory = false;
+let activeConversationId = "";
+let editingMessageId = "";
 let pendingAttachment = null;
 let appState = { roles: {}, lockedChannels: {}, turn: null };
 let profile = {
   name: savedName || "Usuario",
   status: localStorage.getItem("profileStatus") || "Disponible",
+  presence: localStorage.getItem("profilePresence") || "online",
   color: localStorage.getItem("profileColor") || "#949cf7",
   avatar: localStorage.getItem("profileAvatar") || "",
+  theme: localStorage.getItem("theme") || "dark",
   role: "member"
 };
 let isMuted = localStorage.getItem("isMuted") === "true";
@@ -143,6 +164,72 @@ function messageChannel(message) {
   return message.channel || "general";
 }
 
+function conversationKeyFor(type, options = {}) {
+  if (type === "dm") {
+    return `dm:${[userId, options.peerId].filter(Boolean).sort().join(":")}`;
+  }
+  return `channel:${options.guild || currentGuild}:${options.channel || currentChannel}`;
+}
+
+function currentConversationId() {
+  return currentMode === "dm" && dmPeer
+    ? conversationKeyFor("dm", { peerId: dmPeer.id })
+    : conversationKeyFor("channel", { guild: currentGuild, channel: currentChannel });
+}
+
+function applyTheme(theme) {
+  const nextTheme = theme === "light" ? "light" : "dark";
+  profile.theme = nextTheme;
+  document.documentElement.dataset.theme = nextTheme;
+  localStorage.setItem("theme", nextTheme);
+}
+
+function searchParams() {
+  return {
+    q: searchInput.value.trim(),
+    user: searchUserInput.value.trim(),
+    from: searchFromInput.value,
+    to: searchToInput.value
+  };
+}
+
+function debounce(callback, delay = 250) {
+  let timeoutId = 0;
+  return (...args) => {
+    window.clearTimeout(timeoutId);
+    timeoutId = window.setTimeout(() => callback(...args), delay);
+  };
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  if (value >= 1024 * 1024) return `${Math.round(value / 1024 / 1024)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} bytes`;
+}
+
+function setUploadProgress(percent, label = "") {
+  const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+  uploadProgress.hidden = false;
+  uploadProgressBar.style.width = `${safePercent}%`;
+  uploadProgressText.textContent = label || `${safePercent}%`;
+}
+
+function resetUploadProgress() {
+  uploadProgress.hidden = true;
+  uploadProgressBar.style.width = "0%";
+  uploadProgressText.textContent = "0%";
+}
+
+function lastMessageForChannel(channel) {
+  const conversation = conversations.find(item => item.id === conversationKeyFor("channel", {
+    guild: currentGuild,
+    channel
+  }));
+  return conversation?.lastMessage?.text || "";
+}
+
 function updateProfile() {
   const name = displayName();
   const shortName = initials(name);
@@ -184,7 +271,7 @@ function renderMembers(users) {
     item.className = "member";
 
     const avatar = document.createElement("div");
-    avatar.className = "avatar online";
+    avatar.className = `avatar ${user.presence || "online"}`;
     if (user.avatar) {
       const image = document.createElement("img");
       image.src = user.avatar;
@@ -203,7 +290,8 @@ function renderMembers(users) {
     if (user.voiceChannel && user.voiceGuild === currentGuild) {
       status.textContent = `Voz: ${user.voiceChannel}`;
     } else {
-      status.textContent = user.id === userId ? "Tu cuenta" : "Disponible";
+      const presenceLabel = user.presence === "away" ? "Ausente" : user.presence === "offline" ? "Desconectado" : "En linea";
+      status.textContent = user.id === userId ? `Tu cuenta - ${presenceLabel}` : (user.status || presenceLabel);
     }
 
     details.append(name, status);
@@ -231,8 +319,22 @@ function createChannelButton(channel, type) {
 
   const label = document.createElement("span");
   label.textContent = channel;
+  label.className = "channel-label";
 
-  button.append(icon, label);
+  const last = document.createElement("small");
+  last.className = "channel-last";
+  last.textContent = type === "text" ? lastMessageForChannel(channel).slice(0, 46) : "";
+
+  const conversation = conversations.find(item => item.id === conversationKeyFor("channel", {
+    guild: currentGuild,
+    channel
+  }));
+  const unread = document.createElement("span");
+  unread.className = "unread-badge";
+  unread.hidden = !conversation?.unreadCount;
+  unread.textContent = String(conversation?.unreadCount || "");
+
+  button.append(icon, label, unread, last);
   return button;
 }
 
@@ -287,7 +389,7 @@ function renderMessage(message) {
 
   const time = document.createElement("time");
   time.dateTime = message.time;
-  time.textContent = formatTime(message.time);
+  time.textContent = `${formatTime(message.time)}${message.editedAt ? " editado" : ""}`;
 
   const text = document.createElement("div");
   text.className = "message-text";
@@ -295,13 +397,34 @@ function renderMessage(message) {
 
   meta.append(name, time);
   item.append(avatar, meta, text);
-  if (message.attachment?.data && message.attachment.mime?.startsWith("image/")) {
+  if (message.attachment) {
     const attachment = document.createElement("div");
     attachment.className = "message-attachment";
-    const image = document.createElement("img");
-    image.src = message.attachment.data;
-    image.alt = message.attachment.name || "imagen";
-    attachment.append(image);
+    const source = message.attachment.url || message.attachment.data || "";
+    const fileName = message.attachment.originalName || message.attachment.name || "archivo";
+
+    if (source && message.attachment.mime?.startsWith("image/")) {
+      const image = document.createElement("img");
+      image.src = source;
+      image.alt = fileName;
+      attachment.append(image);
+    } else if (source && message.attachment.mime?.startsWith("video/")) {
+      const video = document.createElement("video");
+      video.src = source;
+      video.controls = true;
+      attachment.append(video);
+    } else if (source && message.attachment.mime?.startsWith("audio/")) {
+      const audio = document.createElement("audio");
+      audio.src = source;
+      audio.controls = true;
+      attachment.append(audio);
+    } else {
+      const link = document.createElement("a");
+      link.href = source || "#";
+      link.download = fileName;
+      link.textContent = fileName;
+      attachment.append(link);
+    }
     item.append(attachment);
   }
 
@@ -318,13 +441,37 @@ function renderMessage(message) {
     button.textContent = `${emoji} ${users.length || ""}`.trim();
     actions.append(button);
   });
+  if (message.userId === userId || ["admin", "mod"].includes(profile.role)) {
+    const editButton = document.createElement("button");
+    editButton.className = "message-tool";
+    editButton.type = "button";
+    editButton.dataset.action = "edit";
+    editButton.dataset.messageId = message.id;
+    editButton.textContent = "Editar";
+
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "message-tool danger";
+    deleteButton.type = "button";
+    deleteButton.dataset.action = "delete";
+    deleteButton.dataset.messageId = message.id;
+    deleteButton.textContent = "Eliminar";
+    actions.append(editButton, deleteButton);
+  }
+  const readInfo = document.createElement("span");
+  readInfo.className = "read-state";
+  readInfo.textContent = message.userId === userId ? ((message.readBy || []).length > 1 ? "Leido" : "Enviado") : "";
+  actions.append(readInfo);
   item.append(actions);
   messagesList.append(item);
 }
 
 function renderMessages() {
   messagesList.replaceChildren();
-  const query = searchInput.value.trim().toLowerCase();
+  const filters = searchParams();
+  const query = filters.q.toLowerCase();
+  const userQuery = filters.user.toLowerCase();
+  const fromTime = filters.from ? new Date(filters.from).getTime() : 0;
+  const toTime = filters.to ? new Date(filters.to).getTime() + 86_399_999 : 0;
   const visibleMessages = messageHistory
     .filter(message => {
       if (currentMode === "dm" && dmPeer) {
@@ -335,7 +482,15 @@ function renderMessages() {
     })
     .filter(message => {
       if (!query) return true;
-      return `${message.name} ${message.text}`.toLowerCase().includes(query);
+      return `${message.name} ${message.text} ${message.attachment?.originalName || ""}`.toLowerCase().includes(query);
+    })
+    .filter(message => {
+      if (!userQuery) return true;
+      return message.name.toLowerCase().includes(userQuery) || message.userId.toLowerCase().includes(userQuery);
+    })
+    .filter(message => {
+      const messageTime = new Date(message.time).getTime();
+      return (!fromTime || messageTime >= fromTime) && (!toTime || messageTime <= toTime);
     });
 
   if (!visibleMessages.length) {
@@ -348,6 +503,7 @@ function renderMessages() {
     visibleMessages.forEach(renderMessage);
   }
 
+  loadMoreButton.hidden = !hasMoreHistory;
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
@@ -385,27 +541,66 @@ function mergeMessages(nextMessages) {
     .sort((left, right) => new Date(left.time) - new Date(right.time));
 }
 
-async function loadMessages() {
+function applyConversations(nextConversations) {
+  conversations = Array.isArray(nextConversations) ? nextConversations : [];
+  renderChannels();
+}
+
+async function loadMessages(options = {}) {
   if (isLoadingHistory) return;
   isLoadingHistory = true;
+  const appendOlder = Boolean(options.before);
+  const targetConversationId = currentConversationId();
 
   try {
+    if (!appendOlder && targetConversationId !== activeConversationId) {
+      messageHistory = [];
+      historyCursor = "";
+      hasMoreHistory = false;
+      activeConversationId = targetConversationId;
+    }
     const params = new URLSearchParams(
       currentMode === "dm" && dmPeer
         ? { type: "dm", userId, peerId: dmPeer.id }
         : { type: "channel", guild: currentGuild, channel: currentChannel }
     );
+    Object.entries(searchParams()).forEach(([key, value]) => {
+      if (value) params.set(key, value);
+    });
+    params.set("limit", "50");
+    if (options.before) params.set("before", options.before);
     const response = await fetch(`/messages?${params.toString()}`, {
       cache: "no-store"
     });
     if (!response.ok) return;
 
-    const messages = await response.json();
-    mergeMessages(messages);
+    const result = await response.json();
+    if (!appendOlder) messageHistory = [];
+    mergeMessages(result.messages || []);
+    historyCursor = result.nextCursor || "";
+    hasMoreHistory = Boolean(result.hasMore);
     renderMessages();
+    if (!appendOlder) markCurrentConversationRead();
   } finally {
     isLoadingHistory = false;
   }
+}
+
+async function loadConversations() {
+  const response = await fetch(`/conversations?userId=${encodeURIComponent(userId)}`, { cache: "no-store" }).catch(() => null);
+  if (!response?.ok) return;
+  applyConversations(await response.json());
+}
+
+async function markCurrentConversationRead() {
+  const conversationId = currentConversationId();
+  if (!conversationId) return;
+  await fetch("/read", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, conversationId, readAt: new Date().toISOString() })
+  }).catch(() => {});
+  loadConversations();
 }
 
 function applyState(state) {
@@ -482,6 +677,7 @@ function setCurrentChannel(channel) {
   channelName.textContent = currentChannel;
   messageInput.placeholder = `Enviar mensaje a #${currentChannel}`;
   updateActiveChannel();
+  activeConversationId = "";
   renderMessages();
   loadMessages();
 }
@@ -493,12 +689,21 @@ function openDirectMessage(user) {
   channelName.textContent = `@${user.name}`;
   channelTopic.textContent = "Mensaje privado";
   messageInput.placeholder = `Enviar mensaje privado a ${user.name}`;
+  activeConversationId = "";
   renderMessages();
   loadMessages();
 }
 
 function setConnected(isConnected) {
   connectionStatus.textContent = isConnected ? "Conectado" : "Reconectando...";
+}
+
+function showVisualNotification(message) {
+  const notice = document.createElement("div");
+  notice.className = "toast";
+  notice.textContent = `${message.name}: ${message.text || message.attachment?.originalName || "Archivo"}`;
+  document.body.append(notice);
+  window.setTimeout(() => notice.remove(), 3500);
 }
 
 async function sendPresence() {
@@ -509,6 +714,7 @@ async function sendPresence() {
       body: JSON.stringify({
         id: userId,
         name: displayName(),
+        presence: profile.presence,
         voiceChannel: currentVoiceChannel,
         voiceGuild: currentVoiceChannel ? currentGuild : ""
       })
@@ -535,12 +741,36 @@ function playNotifySound() {
   } catch (_) {}
 }
 
-function readFileAsDataUrl(file) {
+function readFileAsDataUrl(file, onProgress = () => {}) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
     reader.onerror = reject;
+    reader.onprogress = event => {
+      if (event.lengthComputable) onProgress((event.loaded / event.total) * 100);
+    };
     reader.readAsDataURL(file);
+  });
+}
+
+function requestJson(method, url, payload, onUploadProgress = () => {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.upload.onprogress = event => {
+      if (event.lengthComputable) onUploadProgress((event.loaded / event.total) * 100);
+    };
+    xhr.onload = () => {
+      const body = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body);
+      } else {
+        reject(new Error(body?.error || "No se pudo completar la solicitud."));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Error de red durante la subida."));
+    xhr.send(JSON.stringify(payload));
   });
 }
 
@@ -730,7 +960,7 @@ async function loadPresence() {
 }
 
 function connectEvents() {
-  const events = new EventSource("/events");
+  const events = new EventSource(`/events?userId=${encodeURIComponent(userId)}`);
 
   events.addEventListener("open", () => setConnected(true));
   events.addEventListener("error", () => setConnected(false));
@@ -742,10 +972,23 @@ function connectEvents() {
 
   events.addEventListener("message", event => {
     const message = JSON.parse(event.data);
-    mergeMessages([message]);
-    renderMessages();
-    if (message.userId !== userId && Notification.permission === "granted") {
-      new Notification(`MarioChat - ${message.name}`, { body: message.text || "Envio una imagen" });
+    const belongsToCurrent = conversationKeyFor(message.type, {
+      peerId: message.userId === userId ? message.to : message.userId,
+      guild: message.guild,
+      channel: message.channel
+    }) === currentConversationId();
+    if (belongsToCurrent) {
+      mergeMessages([message]);
+      renderMessages();
+      markCurrentConversationRead();
+    } else {
+      showVisualNotification(message);
+    }
+    loadConversations();
+    if (message.userId !== userId) {
+      if (Notification.permission === "granted") {
+        new Notification(`MarioChat - ${message.name}`, { body: message.text || "Envio un archivo" });
+      }
       playNotifySound();
     }
   });
@@ -755,8 +998,23 @@ function connectEvents() {
     renderMessages();
   });
 
+  events.addEventListener("message-delete", event => {
+    const deleted = JSON.parse(event.data);
+    messageHistory = messageHistory.filter(message => message.id !== deleted.id);
+    renderMessages();
+    loadConversations();
+  });
+
   events.addEventListener("state", event => {
     applyState(JSON.parse(event.data));
+  });
+
+  events.addEventListener("conversations", event => {
+    loadConversations();
+  });
+
+  events.addEventListener("read-receipt", () => {
+    loadConversations();
   });
 
   events.addEventListener("presence", event => {
@@ -822,7 +1080,32 @@ toggleMembersButton.addEventListener("click", () => {
   chatLayout.classList.toggle("hide-members");
 });
 
-searchInput.addEventListener("input", renderMessages);
+const reloadSearch = debounce(() => {
+  activeConversationId = "";
+  loadMessages();
+});
+
+searchInput.addEventListener("input", reloadSearch);
+searchUserInput.addEventListener("input", reloadSearch);
+searchFromInput.addEventListener("change", reloadSearch);
+searchToInput.addEventListener("change", reloadSearch);
+
+searchOptionsButton.addEventListener("click", () => {
+  searchPanel.hidden = !searchPanel.hidden;
+});
+
+clearSearchButton.addEventListener("click", () => {
+  searchInput.value = "";
+  searchUserInput.value = "";
+  searchFromInput.value = "";
+  searchToInput.value = "";
+  activeConversationId = "";
+  loadMessages();
+});
+
+loadMoreButton.addEventListener("click", () => {
+  if (historyCursor) loadMessages({ before: historyCursor });
+});
 
 attachButton.addEventListener("click", () => {
   fileInput.click();
@@ -831,18 +1114,33 @@ attachButton.addEventListener("click", () => {
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files?.[0];
   if (!file) return;
-  if (file.size > 1_500_000) {
-    window.alert("La imagen es muy grande. Usa una menor de 1.5 MB.");
+  const maxFileSize = appState.maxAttachmentBytes || 100 * 1024 * 1024;
+  if (file.size > maxFileSize) {
+    window.alert(`El archivo es muy grande. Limite actual: ${formatBytes(maxFileSize)}.`);
     fileInput.value = "";
     return;
   }
+  setUploadProgress(0, "Preparando");
   pendingAttachment = {
     name: file.name,
     mime: file.type,
-    data: await readFileAsDataUrl(file)
+    data: await readFileAsDataUrl(file, percent => setUploadProgress(percent, `Preparando ${Math.round(percent)}%`))
   };
-  messageInput.placeholder = `Imagen lista: ${file.name}`;
+  resetUploadProgress();
+  messageInput.placeholder = `Archivo listo: ${file.name}`;
 });
+
+function exportCurrentConversation(format) {
+  const params = new URLSearchParams(
+    currentMode === "dm" && dmPeer
+      ? { format, type: "dm", userId, peerId: dmPeer.id }
+      : { format, type: "channel", guild: currentGuild, channel: currentChannel }
+  );
+  window.location.href = `/export?${params.toString()}`;
+}
+
+exportJsonButton.addEventListener("click", () => exportCurrentConversation("json"));
+exportTxtButton.addEventListener("click", () => exportCurrentConversation("txt"));
 
 emojiButton.addEventListener("click", () => {
   const insert = " :)";
@@ -873,23 +1171,33 @@ leaveVoiceButton.addEventListener("click", () => {
 settingsButton.addEventListener("click", () => {
   settingsNameInput.value = displayName();
   settingsStatusInput.value = profile.status;
+  settingsPresenceInput.value = profile.presence;
   settingsColorInput.value = profile.color;
+  settingsThemeInput.value = profile.theme;
   settingsDialog.showModal();
 });
 
 saveSettingsButton.addEventListener("click", async () => {
   const avatarFile = settingsAvatarInput.files?.[0];
   if (avatarFile) {
+    if (avatarFile.size > 120_000) {
+      window.alert("La foto de perfil debe ser menor de 120 KB.");
+      return;
+    }
     profile.avatar = await readFileAsDataUrl(avatarFile);
     localStorage.setItem("profileAvatar", profile.avatar);
   }
   nameInput.value = settingsNameInput.value.trim();
   profile.name = displayName();
   profile.status = settingsStatusInput.value.trim() || "Disponible";
+  profile.presence = settingsPresenceInput.value || "online";
   profile.color = settingsColorInput.value || "#949cf7";
+  profile.theme = settingsThemeInput.value || "dark";
   localStorage.setItem("chatName", currentName());
   localStorage.setItem("profileStatus", profile.status);
+  localStorage.setItem("profilePresence", profile.presence);
   localStorage.setItem("profileColor", profile.color);
+  applyTheme(profile.theme);
   updateProfile();
   await fetch("/profile", {
     method: "POST",
@@ -943,6 +1251,34 @@ members.addEventListener("click", event => {
 });
 
 messagesList.addEventListener("click", async event => {
+  const tool = event.target.closest(".message-tool");
+  if (tool) {
+    const message = messageHistory.find(item => item.id === tool.dataset.messageId);
+    if (!message) return;
+
+    if (tool.dataset.action === "edit") {
+      editingMessageId = message.id;
+      messageInput.value = message.text || "";
+      messageInput.focus();
+      messageInput.placeholder = "Editar mensaje";
+      return;
+    }
+
+    if (tool.dataset.action === "delete") {
+      if (!window.confirm("Eliminar este mensaje?")) return;
+      const response = await fetch("/messages", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: message.id, userId })
+      }).catch(() => null);
+      if (response?.ok) {
+        messageHistory = messageHistory.filter(item => item.id !== message.id);
+        renderMessages();
+      }
+      return;
+    }
+  }
+
   const button = event.target.closest(".reaction-button");
   if (!button) return;
   const response = await fetch("/reaction", {
@@ -1014,10 +1350,12 @@ messageForm.addEventListener("submit", async event => {
   submitButton.disabled = true;
 
   try {
-    const response = await fetch("/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    if (pendingAttachment) setUploadProgress(0, "Subiendo 0%");
+    const result = await requestJson(editingMessageId ? "PUT" : "POST", "/messages", editingMessageId ? {
+        messageId: editingMessageId,
+        userId,
+        text
+      } : {
         userId,
         name,
         text,
@@ -1026,15 +1364,15 @@ messageForm.addEventListener("submit", async event => {
         guild: currentGuild,
         channel: currentChannel,
         attachment: pendingAttachment
-      })
-    });
+      }, percent => setUploadProgress(percent, `Subiendo ${Math.round(percent)}%`));
 
-    if (!response.ok) {
-      const result = await response.json().catch(() => ({}));
-      throw new Error(result.error || "No se pudo enviar el mensaje.");
+    if (editingMessageId) {
+      mergeMessages([result]);
+      renderMessages();
     }
 
     messageInput.value = "";
+    editingMessageId = "";
     pendingAttachment = null;
     fileInput.value = "";
     messageInput.placeholder = currentMode === "dm" && dmPeer
@@ -1042,11 +1380,15 @@ messageForm.addEventListener("submit", async event => {
       : `Enviar mensaje a #${currentChannel}`;
     messageInput.style.height = "auto";
     messageInput.focus();
+  } catch (error) {
+    window.alert(error.message || `No se pudo subir el archivo. Limite actual: ${formatBytes(appState.maxAttachmentBytes || 100 * 1024 * 1024)}.`);
   } finally {
     submitButton.disabled = false;
+    resetUploadProgress();
   }
 });
 
+applyTheme(profile.theme);
 updateProfile();
 updateAudioButtons();
 updateVoiceUi();
@@ -1056,6 +1398,7 @@ setCurrentGuild(currentGuild);
 connectEvents();
 loadState();
 loadMessages();
+loadConversations();
 fetch("/profile", {
   method: "POST",
   headers: { "Content-Type": "application/json" },

@@ -20,6 +20,28 @@
   --danger: #da373c;
 }
 
+:root[data-theme="light"] {
+  color-scheme: light;
+  --server-rail: #e4e7ec;
+  --guild-panel: #f2f4f7;
+  --guild-panel-dark: #e9edf2;
+  --chat-bg: #ffffff;
+  --chat-bg-soft: #f3f6f9;
+  --member-bg: #f2f4f7;
+  --input-bg: #edf1f5;
+  --hover: #e6ebf1;
+  --active: #dbe4ee;
+  --text: #1f2937;
+  --muted: #4b5563;
+  --quiet: #667085;
+  --line: #d0d5dd;
+  --brand: #2563eb;
+  --brand-hover: #1d4ed8;
+  --green: #16803c;
+  --yellow: #b7791f;
+  --danger: #b42318;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -201,16 +223,46 @@ p {
 
 .channel {
   width: 100%;
-  height: 34px;
-  display: flex;
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  padding: 0 8px;
+  padding: 6px 8px;
   border-radius: 4px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
   text-align: left;
+}
+
+.channel-label,
+.channel-last {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-last {
+  grid-column: 2;
+  margin-top: -4px;
+  color: var(--quiet);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.unread-badge {
+  min-width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  padding: 0 6px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .channel:hover {
@@ -332,6 +384,14 @@ p {
 
 .avatar.idle::after {
   background: var(--yellow);
+}
+
+.avatar.away::after {
+  background: var(--yellow);
+}
+
+.avatar.offline::after {
+  background: #747b86;
 }
 
 .profile-name {
@@ -489,7 +549,37 @@ select {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.search-panel {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) 140px 140px auto;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chat-bg-soft);
+}
+
+.search-panel[hidden] {
+  display: none;
+}
+
+.search-panel input {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 4px;
+  background: var(--input-bg);
+}
+
+.load-more {
+  justify-self: center;
+  margin: 10px auto 0;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--muted);
+  cursor: pointer;
 }
 
 .messages {
@@ -600,11 +690,71 @@ select {
   background: #1e1f22;
 }
 
+.message-attachment video,
+.message-attachment audio {
+  display: block;
+  width: 100%;
+  background: #1e1f22;
+}
+
+.message-attachment video {
+  max-height: 320px;
+}
+
+.message-attachment a {
+  display: block;
+  padding: 12px;
+  color: #fff;
+  background: #1e1f22;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
 .message-actions {
   grid-column: 2;
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
+}
+
+.message-tool {
+  height: 24px;
+  border-radius: 999px;
+  padding: 0 8px;
+  background: #2b2d31;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.message-tool:hover {
+  color: #fff;
+  background: var(--hover);
+}
+
+.message-tool.danger {
+  color: #ff8589;
+}
+
+.read-state {
+  color: var(--quiet);
+  font-size: 11px;
+}
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 20;
+  max-width: min(360px, calc(100vw - 36px));
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--guild-panel-dark);
+  color: var(--text);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
 }
 
 .reaction-button {
@@ -719,6 +869,46 @@ textarea::placeholder {
 .send-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.upload-progress {
+  grid-column: 1 / -1;
+  min-height: 24px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+  color: var(--quiet);
+  font-size: 12px;
+}
+
+.upload-progress[hidden] {
+  display: none;
+}
+
+.upload-progress::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--input-bg);
+}
+
+.upload-progress-bar {
+  grid-column: 1;
+  grid-row: 1;
+  width: 0%;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--green);
+  transition: width 120ms ease;
+}
+
+#uploadProgressText {
+  grid-column: 2;
+  grid-row: 1;
+  text-align: right;
 }
 
 .member-list {
@@ -942,8 +1132,13 @@ textarea::placeholder {
     width: auto;
     min-width: max-content;
     height: 34px;
+    min-height: 34px;
     padding: 0 10px;
     background: var(--guild-panel-dark);
+  }
+
+  .channel-last {
+    display: none;
   }
 
   .channel.active {
@@ -1035,8 +1230,13 @@ textarea::placeholder {
 
   .topbar-actions #connectionStatus,
   .topbar-actions .status-dot,
-  .search-box {
+  .search-box,
+  #searchOptionsButton {
     display: none;
+  }
+
+  .search-panel {
+    grid-template-columns: 1fr;
   }
 
   .topbar-button {
