@@ -56,9 +56,15 @@
             <input id="nameInput" maxlength="32" autocomplete="name" placeholder="Usuario">
           </label>
           <div class="panel-actions">
-            <button class="panel-button" id="muteButton" type="button" title="Silenciar microfono" aria-label="Silenciar microfono">M</button>
-            <button class="panel-button" id="deafenButton" type="button" title="Ensordecer" aria-label="Ensordecer">A</button>
-            <button class="panel-button" id="settingsButton" type="button" title="Ajustes" aria-label="Ajustes">S</button>
+            <button class="panel-button" id="muteButton" type="button" title="Silenciar microfono" aria-label="Silenciar microfono">
+              <span class="panel-icon mic-icon" aria-hidden="true"></span>
+            </button>
+            <button class="panel-button" id="deafenButton" type="button" title="Ensordecer" aria-label="Ensordecer">
+              <span class="panel-icon headphones-icon" aria-hidden="true"></span>
+            </button>
+            <button class="panel-button" id="settingsButton" type="button" title="Ajustes" aria-label="Ajustes">
+              <span class="panel-icon settings-icon" aria-hidden="true"></span>
+            </button>
           </div>
         </footer>
       </aside>
