@@ -541,6 +541,18 @@ select {
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.52a2 2 0 0 1-1 1.72l-.15.1a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.52a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
+.camera-icon {
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 10l4.55-2.28A1 1 0 0 1 21 8.62v6.76a1 1 0 0 1-1.45.9L15 14'/%3E%3Crect x='3' y='6' width='12' height='12' rx='2'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.screen-icon {
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='12' rx='2'/%3E%3Cpath d='M8 20h8'/%3E%3Cpath d='M12 16v4'/%3E%3Cpath d='M12 8v5'/%3E%3Cpath d='m9 10 3-3 3 3'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.hangup-icon {
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 11c4.5-3 9.5-3 14 0'/%3E%3Cpath d='M5 11l2.5 4 3-2v-3'/%3E%3Cpath d='M19 11l-2.5 4-3-2v-3'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
 .panel-button.active {
   background: rgba(218, 55, 60, 0.18);
   color: #ff8589;
@@ -550,7 +562,7 @@ select {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 48px minmax(0, 1fr);
+  grid-template-rows: 48px auto minmax(0, 1fr);
 }
 
 .chat-topbar {
@@ -637,6 +649,187 @@ select {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 240px;
+}
+
+.voice-call-panel {
+  min-height: 280px;
+  max-height: min(58vh, 620px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  border-bottom: 1px solid var(--line);
+  background: #1e1f22;
+}
+
+.voice-call-panel[hidden] {
+  display: none;
+}
+
+.voice-call-header {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  color: var(--muted);
+}
+
+.voice-call-header strong,
+.voice-call-header span {
+  display: block;
+}
+
+.voice-call-header strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.voice-call-header span {
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.voice-error {
+  max-width: min(420px, 46vw);
+  color: #ff8589;
+  text-align: right;
+}
+
+.voice-stage {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-auto-rows: minmax(150px, 1fr);
+  gap: 10px;
+  padding: 0 16px 14px;
+  overflow: auto;
+}
+
+.voice-stage.has-screen {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.voice-card {
+  position: relative;
+  min-width: 0;
+  min-height: 150px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: #2b2d31;
+}
+
+.voice-card.screen {
+  grid-column: span 2;
+  min-height: 260px;
+}
+
+.voice-card.speaking {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1px rgba(35, 165, 89, 0.35);
+}
+
+.voice-card video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #111214;
+}
+
+.voice-card.screen video {
+  object-fit: contain;
+}
+
+.voice-avatar {
+  width: 76px;
+  height: 76px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #fff;
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.voice-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.voice-card footer {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: rgba(17, 18, 20, 0.78);
+  color: #fff;
+}
+
+.voice-card footer strong,
+.voice-card footer span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-card footer strong {
+  font-size: 13px;
+}
+
+.voice-card footer span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.voice-controls {
+  height: 66px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: #232428;
+}
+
+.call-control {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #3f4248;
+  color: #dbdee1;
+  cursor: pointer;
+}
+
+.call-control:hover {
+  background: #4e5058;
+  color: #fff;
+}
+
+.call-control.active {
+  background: rgba(88, 101, 242, 0.24);
+  color: #fff;
+}
+
+.call-control.hangup,
+.call-control.hangup:hover {
+  background: var(--danger);
+  color: #fff;
 }
 
 .message-column {
@@ -1145,6 +1338,10 @@ textarea::placeholder {
   opacity: 0.78;
 }
 
+.member.speaking .avatar {
+  box-shadow: 0 0 0 3px rgba(35, 165, 89, 0.45);
+}
+
 .settings-dialog {
   width: min(440px, calc(100vw - 28px));
   border: 0;
@@ -1332,7 +1529,23 @@ textarea::placeholder {
 
   .chat-view {
     min-height: 0;
-    grid-template-rows: 44px minmax(0, 1fr);
+    grid-template-rows: 44px auto minmax(0, 1fr);
+  }
+
+  .voice-call-panel {
+    min-height: 240px;
+    max-height: 46vh;
+  }
+
+  .voice-stage {
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(138px, 1fr);
+    padding: 0 10px 10px;
+  }
+
+  .voice-card.screen {
+    grid-column: auto;
+    min-height: 180px;
   }
 
   .chat-layout {

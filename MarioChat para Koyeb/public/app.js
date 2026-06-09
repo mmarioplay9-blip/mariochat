@@ -46,6 +46,16 @@ const voiceStatus = document.querySelector("#voiceStatus");
 const voiceChannelName = document.querySelector("#voiceChannelName");
 const leaveVoiceButton = document.querySelector("#leaveVoiceButton");
 const remoteAudio = document.querySelector("#remoteAudio");
+const voiceCallPanel = document.querySelector("#voiceCallPanel");
+const callChannelTitle = document.querySelector("#callChannelTitle");
+const callParticipantCount = document.querySelector("#callParticipantCount");
+const voiceErrorText = document.querySelector("#voiceErrorText");
+const voiceStage = document.querySelector("#voiceStage");
+const callMuteButton = document.querySelector("#callMuteButton");
+const callDeafenButton = document.querySelector("#callDeafenButton");
+const cameraButton = document.querySelector("#cameraButton");
+const screenShareButton = document.querySelector("#screenShareButton");
+const hangupButton = document.querySelector("#hangupButton");
 const attachButton = document.querySelector("#attachButton");
 const fileInput = document.querySelector("#fileInput");
 const uploadProgress = document.querySelector("#uploadProgress");
@@ -147,10 +157,21 @@ let isMuted = localStorage.getItem("isMuted") === "true";
 let isDeafened = localStorage.getItem("isDeafened") === "true";
 let currentVoiceChannel = "";
 let localVoiceStream = null;
+let localCameraStream = null;
+let localScreenStream = null;
 let latestUsers = [];
 let lastVoiceSignalId = 0;
 const handledVoiceSignals = new Set();
 const peers = new Map();
+const peerSenders = new Map();
+const remoteStreams = new Map();
+const voiceParticipants = new Map();
+const audioAnalysers = new Map();
+let voiceSocket = null;
+let isCameraOn = false;
+let isScreenSharing = false;
+let lastSpeakingState = false;
+let speakingTimer = 0;
 let peerConfig = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
 };
@@ -356,6 +377,8 @@ function updateProfile() {
 function updateAudioButtons() {
   muteButton.classList.toggle("active", isMuted);
   deafenButton.classList.toggle("active", isDeafened);
+  callMuteButton.classList.toggle("active", isMuted);
+  callDeafenButton.classList.toggle("active", isDeafened);
   muteStatus.textContent = isMuted ? "Silenciado" : "Activo";
   deafenStatus.textContent = isDeafened ? "Desactivado" : "Activo";
   if (localVoiceStream) {
@@ -366,6 +389,12 @@ function updateAudioButtons() {
   remoteAudio.querySelectorAll("audio").forEach(audio => {
     audio.muted = isDeafened;
   });
+  voiceStage.querySelectorAll("video").forEach(video => {
+    if (video.srcObject !== localCameraStream && video.srcObject !== localScreenStream) video.muted = isDeafened;
+  });
+  emitVoiceState("user-muted", { muted: isMuted });
+  emitVoiceState("user-deafened", { deafened: isDeafened });
+  renderVoicePanel();
 }
 
 function renderMembers(users) {
@@ -396,7 +425,14 @@ function renderMembers(users) {
 
     const status = document.createElement("span");
     if (user.voiceChannel && user.voiceGuild === currentGuild) {
-      status.textContent = `Voz: ${user.voiceChannel}`;
+      const voiceFlags = [
+        user.speaking ? "hablando" : "",
+        user.muted ? "muteado" : "",
+        user.deafened ? "deafened" : "",
+        user.cameraOn ? "camara" : "",
+        user.screenSharing ? "pantalla" : ""
+      ].filter(Boolean);
+      status.textContent = `Voz: ${user.voiceChannel}${voiceFlags.length ? ` - ${voiceFlags.join(", ")}` : ""}`;
     } else {
       const presenceLabel = user.presence === "away" ? "Ausente" :
         user.presence === "dnd" ? "No molestar" :
@@ -408,6 +444,8 @@ function renderMembers(users) {
     item.append(avatar, details);
     item.dataset.userId = user.id;
     item.dataset.name = user.name;
+    item.classList.toggle("muted", Boolean(user.muted));
+    item.classList.toggle("speaking", Boolean(user.speaking));
     members.append(item);
   });
   syncVoicePeers();
@@ -456,12 +494,14 @@ function renderChannels() {
 
 function updateVoiceUi() {
   voiceConnection.hidden = !currentVoiceChannel;
+  voiceCallPanel.hidden = !currentVoiceChannel;
   voiceChannelName.textContent = currentVoiceChannel || "";
   voiceStatus.textContent = currentVoiceChannel ? "Voz conectada" : "Voz desconectada";
   document.querySelectorAll(".channel[data-type='voice']").forEach(button => {
     button.classList.toggle("voice-joined", button.dataset.channel === currentVoiceChannel);
     button.classList.toggle("active", button.dataset.channel === currentVoiceChannel);
   });
+  renderVoicePanel();
 }
 
 function renderMessage(message) {
@@ -831,7 +871,12 @@ async function sendPresence() {
         name: displayName(),
         presence: profile.presence,
         voiceChannel: currentVoiceChannel,
-        voiceGuild: currentVoiceChannel ? currentGuild : ""
+        voiceGuild: currentVoiceChannel ? currentGuild : "",
+        muted: isMuted,
+        deafened: isDeafened,
+        cameraOn: isCameraOn,
+        screenSharing: isScreenSharing,
+        speaking: lastSpeakingState
       })
     });
     if (!response.ok) return;
@@ -940,26 +985,190 @@ function requestJson(method, url, payload, onUploadProgress = () => {}) {
   });
 }
 
-async function postVoiceSignal(to, type, payload) {
-  await fetch("/voice-signal", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from: userId,
-      to,
-      guild: currentGuild,
-      channel: currentVoiceChannel,
-      type,
-      payload
-    })
-  }).catch(() => {});
+function showVoiceError(message) {
+  voiceErrorText.textContent = message || "";
+  voiceErrorText.hidden = !message;
+}
+
+function currentVoiceRoomUsers() {
+  return Array.from(voiceParticipants.values());
+}
+
+function localVoiceUser() {
+  return {
+    id: userId,
+    name: displayName(),
+    color: profile.color,
+    avatar: profile.avatar,
+    guild: currentGuild,
+    channel: currentVoiceChannel,
+    muted: isMuted,
+    deafened: isDeafened,
+    cameraOn: isCameraOn,
+    screenSharing: isScreenSharing,
+    speaking: lastSpeakingState,
+    cameraStreamId: localCameraStream?.id || "",
+    screenStreamId: localScreenStream?.id || ""
+  };
+}
+
+function streamKindFor(peerId, stream) {
+  const participant = voiceParticipants.get(peerId);
+  if (participant?.screenStreamId && participant.screenStreamId === stream?.id) return "screen";
+  if (participant?.cameraStreamId && participant.cameraStreamId === stream?.id) return "camera";
+  return stream?.getVideoTracks().length ? "camera" : "audio";
+}
+
+function cardId(peerId, kind) {
+  return `voice-card-${CSS.escape(peerId)}-${kind}`;
+}
+
+function renderVoicePanel() {
+  voiceCallPanel.hidden = !currentVoiceChannel;
+  callChannelTitle.textContent = currentVoiceChannel ? `Voz: ${currentVoiceChannel}` : "Sala de voz";
+  const users = currentVoiceChannel ? [localVoiceUser(), ...currentVoiceRoomUsers().filter(user => user.id !== userId)] : [];
+  callParticipantCount.textContent = `${users.length} conectado${users.length === 1 ? "" : "s"}`;
+  callMuteButton.classList.toggle("active", isMuted);
+  callDeafenButton.classList.toggle("active", isDeafened);
+  cameraButton.classList.toggle("active", isCameraOn);
+  screenShareButton.classList.toggle("active", isScreenSharing);
+
+  voiceStage.classList.toggle("has-screen", users.some(user => user.screenSharing));
+  voiceStage.replaceChildren();
+
+  users.forEach(user => {
+    const remote = remoteStreams.get(user.id) || new Map();
+    const cards = [];
+    if (user.screenSharing) cards.push({ kind: "screen", stream: user.id === userId ? localScreenStream : remote.get("screen") });
+    if (user.cameraOn) cards.push({ kind: "camera", stream: user.id === userId ? localCameraStream : remote.get("camera") });
+    if (!cards.length) cards.push({ kind: "audio", stream: null });
+
+    cards.forEach(({ kind, stream }) => {
+      const card = document.createElement("article");
+      card.className = `voice-card ${kind}`;
+      card.id = cardId(user.id, kind);
+      card.dataset.userId = user.id;
+      card.classList.toggle("speaking", Boolean(user.speaking));
+      card.classList.toggle("muted", Boolean(user.muted));
+      card.classList.toggle("deafened", Boolean(user.deafened));
+
+      if (stream?.getVideoTracks().length) {
+        const video = document.createElement("video");
+        video.autoplay = true;
+        video.playsInline = true;
+        video.muted = user.id === userId || isDeafened;
+        video.srcObject = stream;
+        card.append(video);
+      } else {
+        const avatar = document.createElement("div");
+        avatar.className = "voice-avatar";
+        if (user.avatar) {
+          const image = document.createElement("img");
+          image.src = user.avatar;
+          image.alt = user.name;
+          avatar.append(image);
+        } else {
+          avatar.textContent = initials(user.name);
+        }
+        card.append(avatar);
+      }
+
+      const footer = document.createElement("footer");
+      footer.innerHTML = `<strong></strong><span></span>`;
+      footer.querySelector("strong").textContent = user.id === userId ? `${user.name} (tu)` : user.name;
+      const badges = [
+        user.muted ? "muteado" : "",
+        user.deafened ? "deafened" : "",
+        user.cameraOn ? "camara" : "",
+        user.screenSharing ? "pantalla" : "",
+        user.speaking ? "hablando" : ""
+      ].filter(Boolean);
+      footer.querySelector("span").textContent = badges.join(" / ") || "conectado";
+      card.append(footer);
+      voiceStage.append(card);
+    });
+  });
+}
+
+function emitVoiceState(eventName, payload = {}) {
+  if (!voiceSocket?.connected || !currentVoiceChannel) return;
+  voiceSocket.emit(eventName, payload);
+}
+
+function stopSpeakingDetection() {
+  window.clearInterval(speakingTimer);
+  speakingTimer = 0;
+  lastSpeakingState = false;
+  for (const analyser of audioAnalysers.values()) analyser?.context?.close?.().catch(() => {});
+  audioAnalysers.clear();
+}
+
+function startSpeakingDetection() {
+  stopSpeakingDetection();
+  const track = localVoiceStream?.getAudioTracks()[0];
+  if (!track) return;
+
+  const context = new AudioContext();
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 512;
+  context.createMediaStreamSource(new MediaStream([track])).connect(analyser);
+  const data = new Uint8Array(analyser.fftSize);
+  audioAnalysers.set(userId, { context, analyser });
+
+  speakingTimer = window.setInterval(() => {
+    analyser.getByteTimeDomainData(data);
+    const volume = data.reduce((sum, value) => sum + Math.abs(value - 128), 0) / data.length;
+    const speaking = !isMuted && volume > 8;
+    if (speaking === lastSpeakingState) return;
+    lastSpeakingState = speaking;
+    emitVoiceState("user-speaking", { speaking });
+    renderVoicePanel();
+  }, 180);
+}
+
+function addLocalTracks(peerId, peer) {
+  const senderMap = peerSenders.get(peerId) || new Map();
+  [
+    [localVoiceStream, "audio"],
+    [localCameraStream, "camera"],
+    [localScreenStream, "screen"]
+  ].forEach(([stream, kind]) => {
+    stream?.getTracks().forEach(track => {
+      const key = `${kind}:${track.id}`;
+      if (!senderMap.has(key)) senderMap.set(key, peer.addTrack(track, stream));
+    });
+  });
+  peerSenders.set(peerId, senderMap);
+}
+
+function removeLocalStreamFromPeers(stream) {
+  if (!stream) return;
+  for (const [peerId, peer] of peers) {
+    const senderMap = peerSenders.get(peerId);
+    if (!senderMap) continue;
+    for (const [key, sender] of senderMap) {
+      if (stream.getTracks().includes(sender.track)) {
+        peer.removeTrack(sender);
+        senderMap.delete(key);
+      }
+    }
+    renegotiatePeer(peerId);
+  }
+}
+
+function sendWebRtc(to, eventName, payload) {
+  if (!voiceSocket?.connected) return;
+  voiceSocket.emit(eventName, { to, payload });
 }
 
 function removePeer(peerId) {
   const peer = peers.get(peerId);
   if (peer) peer.close();
   peers.delete(peerId);
+  peerSenders.delete(peerId);
+  remoteStreams.delete(peerId);
   remoteAudio.querySelector(`[data-peer="${CSS.escape(peerId)}"]`)?.remove();
+  renderVoicePanel();
 }
 
 function createPeer(peerId) {
@@ -967,150 +1176,234 @@ function createPeer(peerId) {
 
   const peer = new RTCPeerConnection(peerConfig);
   peers.set(peerId, peer);
-
-  if (localVoiceStream) {
-    localVoiceStream.getTracks().forEach(track => {
-      peer.addTrack(track, localVoiceStream);
-    });
-  }
+  addLocalTracks(peerId, peer);
 
   peer.addEventListener("icecandidate", event => {
-    if (event.candidate) {
-      postVoiceSignal(peerId, "candidate", event.candidate);
-    }
+    if (event.candidate) sendWebRtc(peerId, "webrtc-ice-candidate", event.candidate);
   });
 
   peer.addEventListener("track", event => {
+    const stream = event.streams[0] || new MediaStream([event.track]);
+    const kind = streamKindFor(peerId, stream);
+    if (!remoteStreams.has(peerId)) remoteStreams.set(peerId, new Map());
+    remoteStreams.get(peerId).set(kind, stream);
+
     let audio = remoteAudio.querySelector(`[data-peer="${CSS.escape(peerId)}"]`);
-    if (!audio) {
+    if (!audio && stream.getAudioTracks().length) {
       audio = document.createElement("audio");
       audio.autoplay = true;
       audio.playsInline = true;
       audio.dataset.peer = peerId;
       remoteAudio.append(audio);
     }
-    audio.srcObject = event.streams[0];
-    audio.muted = isDeafened;
+    if (audio) {
+      audio.srcObject = stream;
+      audio.muted = isDeafened;
+    }
+    renderVoicePanel();
   });
 
   peer.addEventListener("connectionstatechange", () => {
-    if (peer.connectionState === "connected") {
-      voiceStatus.textContent = "Voz conectada";
-    }
-    if (["closed", "failed", "disconnected"].includes(peer.connectionState)) {
-      removePeer(peerId);
-      if (currentVoiceChannel && latestUsers.some(user => user.id === peerId && user.voiceChannel === currentVoiceChannel)) {
-        window.setTimeout(syncVoicePeers, 1000);
-      }
-    }
+    if (peer.connectionState === "connected") voiceStatus.textContent = "Voz conectada";
+    if (["closed", "failed", "disconnected"].includes(peer.connectionState)) removePeer(peerId);
   });
 
   return peer;
 }
 
-async function callPeer(peerId) {
-  const peer = createPeer(peerId);
+async function renegotiatePeer(peerId) {
+  const peer = peers.get(peerId);
+  if (!peer || peer.signalingState !== "stable") return;
   const offer = await peer.createOffer();
   await peer.setLocalDescription(offer);
-  await postVoiceSignal(peerId, "offer", peer.localDescription);
+  sendWebRtc(peerId, "webrtc-offer", peer.localDescription);
+}
+
+async function callPeer(peerId) {
+  const peer = createPeer(peerId);
+  await renegotiatePeer(peerId);
 }
 
 function syncVoicePeers() {
   if (!currentVoiceChannel || !localVoiceStream) return;
-
-  const voiceUserIds = latestUsers
-    .filter(user => user.id !== userId && user.voiceChannel === currentVoiceChannel && user.voiceGuild === currentGuild)
+  const voiceUserIds = currentVoiceRoomUsers()
+    .filter(user => user.id !== userId)
     .map(user => user.id);
 
-  for (const peerId of peers.keys()) {
+  for (const peerId of Array.from(peers.keys())) {
     if (!voiceUserIds.includes(peerId)) removePeer(peerId);
   }
 
   voiceUserIds.forEach(peerId => {
-    if (!peers.has(peerId) && userId < peerId) {
-      callPeer(peerId);
-    }
+    if (!peers.has(peerId) && userId < peerId) callPeer(peerId);
   });
 }
 
-async function handleVoiceSignal(signal) {
-  if (signal.id && handledVoiceSignals.has(signal.id)) return;
-  if (signal.id) {
-    handledVoiceSignals.add(signal.id);
-    lastVoiceSignalId = Math.max(lastVoiceSignalId, signal.id);
-  }
+async function handleVoiceSignal(eventName, signal) {
   if (signal.to !== userId || signal.from === userId) return;
-  if (!currentVoiceChannel || signal.channel !== currentVoiceChannel) return;
+  if (!currentVoiceChannel || signal.channel !== currentVoiceChannel || signal.guild !== currentGuild) return;
 
   const peer = createPeer(signal.from);
-
-  if (signal.type === "offer") {
+  if (eventName === "webrtc-offer") {
     await peer.setRemoteDescription(new RTCSessionDescription(signal.payload));
     const answer = await peer.createAnswer();
     await peer.setLocalDescription(answer);
-    await postVoiceSignal(signal.from, "answer", peer.localDescription);
+    sendWebRtc(signal.from, "webrtc-answer", peer.localDescription);
   }
-
-  if (signal.type === "answer") {
+  if (eventName === "webrtc-answer") {
     await peer.setRemoteDescription(new RTCSessionDescription(signal.payload));
   }
-
-  if (signal.type === "candidate" && signal.payload) {
+  if (eventName === "webrtc-ice-candidate" && signal.payload) {
     await peer.addIceCandidate(new RTCIceCandidate(signal.payload)).catch(() => {});
   }
 }
 
-async function loadVoiceSignals() {
-  try {
-    const params = new URLSearchParams({
-      userId,
-      after: String(lastVoiceSignalId)
-    });
-    const response = await fetch(`/voice-signals?${params.toString()}`, {
-      cache: "no-store"
-    });
-    if (!response.ok) return;
-
-    const signals = await response.json();
-    for (const signal of signals) {
-      await handleVoiceSignal(signal);
+function connectVoiceSocket() {
+  if (voiceSocket || typeof io !== "function") return;
+  voiceSocket = io(API_BASE || undefined, { transports: ["websocket", "polling"] });
+  voiceSocket.on("connect", () => {
+    if (currentVoiceChannel) {
+      voiceSocket.emit("join-voice-channel", {
+        userId,
+        name: displayName(),
+        guild: currentGuild,
+        channel: currentVoiceChannel,
+        muted: isMuted,
+        deafened: isDeafened,
+        cameraOn: isCameraOn,
+        screenSharing: isScreenSharing,
+        cameraStreamId: localCameraStream?.id || "",
+        screenStreamId: localScreenStream?.id || ""
+      });
     }
+  });
+  voiceSocket.on("voice-channel-state", state => {
+    voiceParticipants.clear();
+    (state.users || []).forEach(user => {
+      if (user.id !== userId) voiceParticipants.set(user.id, user);
+    });
+    renderVoicePanel();
+    syncVoicePeers();
+  });
+  voiceSocket.on("voice-user-left", event => removePeer(event.userId));
+  ["user-muted", "user-deafened", "user-camera-on", "user-camera-off", "screen-share-start", "screen-share-stop", "user-speaking"].forEach(eventName => {
+    voiceSocket.on(eventName, user => {
+      if (user.id !== userId) voiceParticipants.set(user.id, user);
+      renderVoicePanel();
+    });
+  });
+  ["webrtc-offer", "webrtc-answer", "webrtc-ice-candidate"].forEach(eventName => {
+    voiceSocket.on(eventName, signal => handleVoiceSignal(eventName, signal));
+  });
+}
+
+async function startCamera() {
+  if (!currentVoiceChannel || isCameraOn) return;
+  try {
+    localCameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    isCameraOn = true;
+    localCameraStream.getVideoTracks()[0]?.addEventListener("ended", stopCamera);
+    for (const [peerId, peer] of peers) {
+      addLocalTracks(peerId, peer);
+      await renegotiatePeer(peerId);
+    }
+    emitVoiceState("user-camera-on", { cameraStreamId: localCameraStream.id });
+    renderVoicePanel();
   } catch (error) {
-    // Polling is a fallback for voice signaling; failed polls are retried.
+    showVoiceError("Permiso de camara denegado.");
   }
+}
+
+async function stopCamera() {
+  if (!localCameraStream) return;
+  const stream = localCameraStream;
+  removeLocalStreamFromPeers(stream);
+  stream.getTracks().forEach(track => track.stop());
+  localCameraStream = null;
+  isCameraOn = false;
+  emitVoiceState("user-camera-off");
+  renderVoicePanel();
+}
+
+async function startScreenShare() {
+  if (!currentVoiceChannel || isScreenSharing) return;
+  try {
+    localScreenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    isScreenSharing = true;
+    localScreenStream.getVideoTracks()[0]?.addEventListener("ended", stopScreenShare);
+    for (const [peerId, peer] of peers) {
+      addLocalTracks(peerId, peer);
+      await renegotiatePeer(peerId);
+    }
+    emitVoiceState("screen-share-start", { screenStreamId: localScreenStream.id });
+    renderVoicePanel();
+  } catch (error) {
+    showVoiceError("No se pudo iniciar la transmision de pantalla.");
+  }
+}
+
+async function stopScreenShare() {
+  if (!localScreenStream) return;
+  const stream = localScreenStream;
+  removeLocalStreamFromPeers(stream);
+  stream.getTracks().forEach(track => track.stop());
+  localScreenStream = null;
+  isScreenSharing = false;
+  emitVoiceState("screen-share-stop");
+  renderVoicePanel();
 }
 
 async function joinVoiceChannel(channel) {
   if (currentVoiceChannel === channel) return;
   await leaveVoiceChannel(false);
+  showVoiceError("");
 
   try {
-    localVoiceStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("MediaDevices no disponible.");
+    localVoiceStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false
+    });
     localVoiceStream.getAudioTracks().forEach(track => {
       track.enabled = !isMuted;
     });
     currentVoiceChannel = channel;
+    connectVoiceSocket();
     updateVoiceUi();
+    startSpeakingDetection();
+    voiceSocket.emit("join-voice-channel", {
+      userId,
+      name: displayName(),
+      guild: currentGuild,
+      channel,
+      muted: isMuted,
+      deafened: isDeafened,
+      cameraOn: false,
+      screenSharing: false
+    });
     await sendPresence();
-    syncVoicePeers();
-    loadVoiceSignals();
     connectionStatus.textContent = `Voz: ${channel}`;
   } catch (error) {
     currentVoiceChannel = "";
     localVoiceStream = null;
     updateVoiceUi();
+    showVoiceError("Permiso de microfono denegado.");
     connectionStatus.textContent = "Permiso de microfono denegado";
   }
 }
 
 async function leaveVoiceChannel(sendUpdate = true) {
+  if (isScreenSharing) await stopScreenShare();
+  if (isCameraOn) await stopCamera();
   for (const peerId of Array.from(peers.keys())) removePeer(peerId);
-  if (localVoiceStream) {
-    localVoiceStream.getTracks().forEach(track => track.stop());
-  }
+  stopSpeakingDetection();
+  if (localVoiceStream) localVoiceStream.getTracks().forEach(track => track.stop());
   localVoiceStream = null;
   currentVoiceChannel = "";
+  voiceParticipants.clear();
+  voiceSocket?.emit("leave-voice-channel");
   updateVoiceUi();
+  renderVoicePanel();
   if (sendUpdate) await sendPresence();
 }
 
@@ -1197,9 +1490,6 @@ function connectEvents() {
     renderMembers(JSON.parse(event.data));
   });
 
-  events.addEventListener("voice-signal", event => {
-    handleVoiceSignal(JSON.parse(event.data));
-  });
 }
 
 document.querySelector(".server-rail").addEventListener("click", event => {
@@ -1417,6 +1707,34 @@ deafenButton.addEventListener("click", () => {
   isDeafened = !isDeafened;
   localStorage.setItem("isDeafened", String(isDeafened));
   updateAudioButtons();
+});
+
+callMuteButton.addEventListener("click", () => {
+  muteButton.click();
+});
+
+callDeafenButton.addEventListener("click", () => {
+  deafenButton.click();
+});
+
+cameraButton.addEventListener("click", () => {
+  if (isCameraOn) {
+    stopCamera();
+  } else {
+    startCamera();
+  }
+});
+
+screenShareButton.addEventListener("click", () => {
+  if (isScreenSharing) {
+    stopScreenShare();
+  } else {
+    startScreenShare();
+  }
+});
+
+hangupButton.addEventListener("click", () => {
+  leaveVoiceChannel();
 });
 
 leaveVoiceButton.addEventListener("click", () => {
@@ -1736,4 +2054,3 @@ if ("Notification" in window && Notification.permission === "default") {
 setInterval(loadMessages, 3000);
 setInterval(sendPresence, 5000);
 setInterval(loadPresence, 7000);
-setInterval(loadVoiceSignals, 1000);

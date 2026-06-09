@@ -103,6 +103,34 @@
           </div>
         </header>
 
+        <section class="voice-call-panel" id="voiceCallPanel" aria-label="Llamada de voz" hidden>
+          <header class="voice-call-header">
+            <div>
+              <strong id="callChannelTitle">Sala de voz</strong>
+              <span id="callParticipantCount">0 conectados</span>
+            </div>
+            <span id="voiceErrorText" class="voice-error" hidden></span>
+          </header>
+          <div class="voice-stage" id="voiceStage" aria-live="polite"></div>
+          <footer class="voice-controls" aria-label="Controles de llamada">
+            <button class="call-control" id="callMuteButton" type="button" title="Microfono" aria-label="Microfono">
+              <span class="panel-icon mic-icon" aria-hidden="true"></span>
+            </button>
+            <button class="call-control" id="callDeafenButton" type="button" title="Ensordecer" aria-label="Ensordecer">
+              <span class="panel-icon headphones-icon" aria-hidden="true"></span>
+            </button>
+            <button class="call-control" id="cameraButton" type="button" title="Camara" aria-label="Camara">
+              <span class="panel-icon camera-icon" aria-hidden="true"></span>
+            </button>
+            <button class="call-control" id="screenShareButton" type="button" title="Transmitir pantalla" aria-label="Transmitir pantalla">
+              <span class="panel-icon screen-icon" aria-hidden="true"></span>
+            </button>
+            <button class="call-control hangup" id="hangupButton" type="button" title="Colgar" aria-label="Colgar">
+              <span class="panel-icon hangup-icon" aria-hidden="true"></span>
+            </button>
+          </footer>
+        </section>
+
         <div class="chat-layout">
           <section class="message-column" aria-label="Mensajes">
             <div class="search-panel" id="searchPanel" hidden>
@@ -234,6 +262,7 @@
     </dialog>
     <div id="remoteAudio" aria-hidden="true"></div>
 
+    <script src="/socket.io/socket.io.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

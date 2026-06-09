@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
+const { Server } = require("socket.io");
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -29,6 +30,8 @@ const clients = new Set();
 const presence = new Map();
 const voiceSignals = [];
 const typingStates = new Map();
+const voiceRooms = new Map();
+const voiceSockets = new Map();
 
 const db = {
   schemaVersion: 2,
@@ -539,11 +542,16 @@ function activeUsers() {
     .map(user => ({
       ...visibleProfile(profileFor(user.id, user.name)),
       voiceChannel: user.voiceChannel,
-      voiceGuild: user.voiceGuild
+      voiceGuild: user.voiceGuild,
+      muted: Boolean(user.muted),
+      deafened: Boolean(user.deafened),
+      cameraOn: Boolean(user.cameraOn),
+      screenSharing: Boolean(user.screenSharing),
+      speaking: Boolean(user.speaking)
     }));
 }
 
-function updatePresence(id, name, voiceChannel, voiceGuild, presenceState) {
+function updatePresence(id, name, voiceChannel, voiceGuild, presenceState, voiceState = {}) {
   const existing = profileFor(id, name);
   db.profiles[id] = {
     ...existing,
@@ -557,6 +565,11 @@ function updatePresence(id, name, voiceChannel, voiceGuild, presenceState) {
     voiceChannel: voiceChannel ? String(voiceChannel).slice(0, 48) : "",
     voiceGuild: voiceGuild ? String(voiceGuild).slice(0, 48) : "",
     presence: db.profiles[id].presence || "online",
+    muted: Boolean(voiceState.muted),
+    deafened: Boolean(voiceState.deafened),
+    cameraOn: Boolean(voiceState.cameraOn),
+    screenSharing: Boolean(voiceState.screenSharing),
+    speaking: Boolean(voiceState.speaking),
     lastSeen: Date.now()
   });
 
@@ -564,6 +577,66 @@ function updatePresence(id, name, voiceChannel, voiceGuild, presenceState) {
   const users = activeUsers();
   broadcast("presence", users);
   return users;
+}
+
+function voiceRoomKey(guild, channel) {
+  return `${String(guild || "mariochat").slice(0, 48)}:${String(channel || "").slice(0, 48)}`;
+}
+
+function publicVoiceUser(user) {
+  const profile = visibleProfile(profileFor(user.userId, user.name));
+  return {
+    id: user.userId,
+    name: profile.name,
+    color: profile.color,
+    avatar: profile.avatar,
+    roleName: profile.roleName,
+    roleColor: profile.roleColor,
+    guild: user.guild,
+    channel: user.channel,
+    muted: Boolean(user.muted),
+    deafened: Boolean(user.deafened),
+    cameraOn: Boolean(user.cameraOn),
+    screenSharing: Boolean(user.screenSharing),
+    speaking: Boolean(user.speaking),
+    cameraStreamId: user.cameraStreamId || "",
+    screenStreamId: user.screenStreamId || ""
+  };
+}
+
+function voiceRoomState(key) {
+  return {
+    room: key,
+    users: Array.from(voiceRooms.get(key)?.values() || []).map(publicVoiceUser)
+  };
+}
+
+function emitVoiceRoomState(io, key) {
+  const state = voiceRoomState(key);
+  io.to(key).emit("voice-channel-state", state);
+  broadcast("presence", activeUsers());
+}
+
+function leaveVoiceRoom(io, socket, reason = "leave") {
+  const existing = voiceSockets.get(socket.id);
+  if (!existing) return;
+
+  const room = voiceRooms.get(existing.roomKey);
+  if (room) {
+    room.delete(existing.userId);
+    if (!room.size) voiceRooms.delete(existing.roomKey);
+  }
+
+  voiceSockets.delete(socket.id);
+  socket.leave(existing.roomKey);
+  updatePresence(existing.userId, existing.name, "", "", undefined, {});
+  socket.to(existing.roomKey).emit("voice-user-left", {
+    userId: existing.userId,
+    guild: existing.guild,
+    channel: existing.channel,
+    reason
+  });
+  emitVoiceRoomState(io, existing.roomKey);
 }
 
 function isChannelLocked(guild, channel) {
@@ -1081,7 +1154,13 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req));
       const id = String(body.id || "").trim();
       if (!id) return sendJson(res, 400, { error: "ID de usuario obligatorio." });
-      return sendJson(res, 200, updatePresence(id, String(body.name || "").trim() || "Usuario", body.voiceChannel, body.voiceGuild, body.presence));
+      return sendJson(res, 200, updatePresence(id, String(body.name || "").trim() || "Usuario", body.voiceChannel, body.voiceGuild, body.presence, {
+        muted: body.muted,
+        deafened: body.deafened,
+        cameraOn: body.cameraOn,
+        screenSharing: body.screenSharing,
+        speaking: body.speaking
+      }));
     } catch (error) {
       return sendJson(res, 400, { error: error.message || "Solicitud invalida." });
     }
@@ -1256,6 +1335,102 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(405);
   res.end("Method not allowed");
+});
+
+const io = new Server(server, {
+  cors: {
+    origin: "*"
+  },
+  maxHttpBufferSize: 1e6
+});
+
+io.on("connection", socket => {
+  socket.on("join-voice-channel", body => {
+    const userId = String(body?.userId || "").trim();
+    const name = String(body?.name || "Usuario").trim().slice(0, 32) || "Usuario";
+    const guild = String(body?.guild || "mariochat").trim().slice(0, 48);
+    const channel = String(body?.channel || "").trim().slice(0, 48);
+    if (!userId || !channel) return;
+
+    leaveVoiceRoom(io, socket, "switch");
+
+    const roomKey = voiceRoomKey(guild, channel);
+    const user = {
+      userId,
+      name,
+      guild,
+      channel,
+      roomKey,
+      muted: Boolean(body?.muted),
+      deafened: Boolean(body?.deafened),
+      cameraOn: Boolean(body?.cameraOn),
+      screenSharing: Boolean(body?.screenSharing),
+      speaking: false,
+      cameraStreamId: String(body?.cameraStreamId || ""),
+      screenStreamId: String(body?.screenStreamId || "")
+    };
+
+    if (!voiceRooms.has(roomKey)) voiceRooms.set(roomKey, new Map());
+    voiceRooms.get(roomKey).set(userId, user);
+    voiceSockets.set(socket.id, user);
+    socket.join(roomKey);
+    updatePresence(userId, name, channel, guild, undefined, user);
+    socket.emit("voice-channel-state", voiceRoomState(roomKey));
+    socket.to(roomKey).emit("voice-user-joined", publicVoiceUser(user));
+    emitVoiceRoomState(io, roomKey);
+  });
+
+  socket.on("leave-voice-channel", () => {
+    leaveVoiceRoom(io, socket, "leave");
+  });
+
+  const updateVoiceState = (eventName, changes, persistPresence = true) => {
+    const user = voiceSockets.get(socket.id);
+    if (!user) return;
+    Object.assign(user, changes);
+    voiceRooms.get(user.roomKey)?.set(user.userId, user);
+    if (persistPresence) updatePresence(user.userId, user.name, user.channel, user.guild, undefined, user);
+    io.to(user.roomKey).emit(eventName, publicVoiceUser(user));
+    if (persistPresence) {
+      emitVoiceRoomState(io, user.roomKey);
+    } else {
+      io.to(user.roomKey).emit("voice-channel-state", voiceRoomState(user.roomKey));
+    }
+  };
+
+  socket.on("user-muted", body => updateVoiceState("user-muted", { muted: Boolean(body?.muted) }));
+  socket.on("user-deafened", body => updateVoiceState("user-deafened", { deafened: Boolean(body?.deafened) }));
+  socket.on("user-camera-on", body => updateVoiceState("user-camera-on", {
+    cameraOn: true,
+    cameraStreamId: String(body?.cameraStreamId || "")
+  }));
+  socket.on("user-camera-off", () => updateVoiceState("user-camera-off", { cameraOn: false, cameraStreamId: "" }));
+  socket.on("screen-share-start", body => updateVoiceState("screen-share-start", {
+    screenSharing: true,
+    screenStreamId: String(body?.screenStreamId || "")
+  }));
+  socket.on("screen-share-stop", () => updateVoiceState("screen-share-stop", { screenSharing: false, screenStreamId: "" }));
+  socket.on("user-speaking", body => updateVoiceState("user-speaking", { speaking: Boolean(body?.speaking) }, false));
+
+  function forwardWebRtc(eventName, body) {
+    const from = voiceSockets.get(socket.id);
+    if (!from) return;
+    const to = String(body?.to || "").trim();
+    const room = voiceRooms.get(from.roomKey);
+    if (!to || !room?.has(to)) return;
+    socket.to(from.roomKey).emit(eventName, {
+      from: from.userId,
+      to,
+      guild: from.guild,
+      channel: from.channel,
+      payload: body?.payload || null
+    });
+  }
+
+  socket.on("webrtc-offer", body => forwardWebRtc("webrtc-offer", body));
+  socket.on("webrtc-answer", body => forwardWebRtc("webrtc-answer", body));
+  socket.on("webrtc-ice-candidate", body => forwardWebRtc("webrtc-ice-candidate", body));
+  socket.on("disconnect", () => leaveVoiceRoom(io, socket, "disconnect"));
 });
 
 server.listen(PORT, "0.0.0.0", () => {
