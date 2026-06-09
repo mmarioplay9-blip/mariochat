@@ -531,6 +531,15 @@ function visibleProfile(profile) {
   };
 }
 
+function publicMessage(message) {
+  const profile = visibleProfile(profileFor(message.userId, message.name));
+  return {
+    ...message,
+    name: profile.name,
+    profile
+  };
+}
+
 function activeUsers() {
   const now = Date.now();
   for (const [id, user] of presence) {
@@ -708,9 +717,10 @@ function addMessage(body) {
   upsertConversation(message);
   saveDb();
   logEvent("message.created", { messageId: message.id, conversationId, userId });
-  broadcast("message", message);
+  const outgoingMessage = publicMessage(message);
+  broadcast("message", outgoingMessage);
   broadcast("conversations", publicConversations());
-  return { message };
+  return { message: outgoingMessage };
 }
 
 function getConversationIdFromUrl(url) {
@@ -756,7 +766,7 @@ function filterMessages(url) {
   if (toTime) messages = messages.filter(message => new Date(message.time).getTime() <= toTime + 86_399_999);
 
   const total = messages.length;
-  const page = messages.slice(Math.max(0, messages.length - limit));
+  const page = messages.slice(Math.max(0, messages.length - limit)).map(publicMessage);
 
   return {
     messages: page,
@@ -771,6 +781,14 @@ function publicConversations(userId = "") {
   return Object.values(db.conversations || {})
     .map(conversation => ({
       ...conversation,
+      participantsProfiles: (conversation.participants || []).map(id => visibleProfile(profileFor(id))),
+      lastMessage: conversation.lastMessage?.userId
+        ? {
+            ...conversation.lastMessage,
+            name: profileFor(conversation.lastMessage.userId, conversation.lastMessage.name).name,
+            profile: visibleProfile(profileFor(conversation.lastMessage.userId, conversation.lastMessage.name))
+          }
+        : conversation.lastMessage,
       unreadCount: unreadCount(conversation, userId),
       readAt: db.readReceipts?.[conversation.id]?.[userId] || ""
     }))
@@ -824,9 +842,10 @@ function editMessage(body) {
   upsertConversation(message);
   saveDb();
   logEvent("message.edited", { messageId, userId });
-  broadcast("message-update", message);
+  const outgoingMessage = publicMessage(message);
+  broadcast("message-update", outgoingMessage);
   broadcast("conversations", publicConversations(userId));
-  return { status: 200, message };
+  return { status: 200, message: outgoingMessage };
 }
 
 function deleteMessage(body) {
@@ -1186,8 +1205,10 @@ const server = http.createServer(async (req, res) => {
       };
       upsertContact(id, db.profiles[id].name);
       saveDb();
+      const publicProfile = visibleProfile(profileFor(id));
+      broadcast("profile-update", { id, profile: publicProfile });
       broadcast("presence", activeUsers());
-      return sendJson(res, 200, visibleProfile(profileFor(id)));
+      return sendJson(res, 200, publicProfile);
     } catch (error) {
       return sendJson(res, 400, { error: error.message || "Solicitud invalida." });
     }
@@ -1284,8 +1305,9 @@ const server = http.createServer(async (req, res) => {
         message.reactions[emoji].push(userId);
       }
       saveDb();
-      broadcast("message-update", message);
-      return sendJson(res, 200, message);
+      const outgoingMessage = publicMessage(message);
+      broadcast("message-update", outgoingMessage);
+      return sendJson(res, 200, outgoingMessage);
     } catch (error) {
       return sendJson(res, 400, { error: error.message || "Solicitud invalida." });
     }

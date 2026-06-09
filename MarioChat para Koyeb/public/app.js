@@ -314,7 +314,9 @@ function lastMessageForChannel(channel) {
 
 function dmPeerFromConversation(conversation) {
   const peerId = (conversation.participants || []).find(id => id !== userId) || "";
-  const contact = latestUsers.find(user => user.id === peerId) || {};
+  const contact = latestUsers.find(user => user.id === peerId) ||
+    (conversation.participantsProfiles || []).find(user => user.id === peerId) ||
+    {};
   return {
     id: peerId,
     name: contact.name || conversation.lastMessage?.name || peerId || "Usuario",
@@ -408,6 +410,89 @@ function updateProfile() {
   }
 }
 
+function profileById(id) {
+  if (id === userId) {
+    return { ...profile, id: userId, name: displayName() };
+  }
+  return latestUsers.find(user => user.id === id) || null;
+}
+
+function avatarForUser(id, fallback = "") {
+  return profileById(id)?.avatar || fallback || "";
+}
+
+function liveMessageProfile(message) {
+  const liveProfile = profileById(message.userId) || {};
+  return {
+    ...(message.profile || {}),
+    ...liveProfile,
+    id: message.userId,
+    name: liveProfile.name || message.profile?.name || message.name,
+    avatar: avatarForUser(message.userId, message.profile?.avatar || "")
+  };
+}
+
+function applyProfileUpdate(payload) {
+  const id = payload?.id || payload?.profile?.id;
+  const nextProfile = payload?.profile || {};
+  if (!id) return;
+
+  if (id === userId) {
+    Object.assign(profile, nextProfile);
+    nameInput.value = profile.name || displayName();
+    localStorage.setItem("chatName", profile.name || displayName());
+    localStorage.setItem("profileAvatar", profile.avatar || "");
+    localStorage.setItem("profileStatus", profile.status || "Disponible");
+    localStorage.setItem("profilePresence", profile.presence || "online");
+    localStorage.setItem("profileColor", profile.color || "#949cf7");
+    localStorage.setItem("profileBio", profile.bio || "");
+    if (profile.banner) localStorage.setItem("profileBanner", profile.banner);
+    updateProfile();
+  }
+
+  let updatedKnownUser = false;
+  latestUsers = latestUsers.map(user => {
+    if (user.id !== id) return user;
+    updatedKnownUser = true;
+    return { ...user, ...nextProfile, id };
+  });
+  if (!updatedKnownUser && id === userId) {
+    latestUsers.push({ ...nextProfile, id, name: nextProfile.name || displayName() });
+  }
+  if (voiceParticipants.has(id)) {
+    voiceParticipants.set(id, { ...voiceParticipants.get(id), ...nextProfile, id });
+  }
+  if (dmPeer?.id === id) dmPeer = { ...dmPeer, ...nextProfile, id };
+  messageHistory = messageHistory.map(message => {
+    if (message.userId !== id) return message;
+    return {
+      ...message,
+      name: nextProfile.name || message.name,
+      profile: {
+        ...(message.profile || {}),
+        ...nextProfile,
+        id
+      }
+    };
+  });
+  conversations = conversations.map(conversation => ({
+    ...conversation,
+    participantsProfiles: (conversation.participantsProfiles || []).map(item => item.id === id ? { ...item, ...nextProfile, id } : item),
+    lastMessage: conversation.lastMessage?.userId === id
+      ? {
+          ...conversation.lastMessage,
+          name: nextProfile.name || conversation.lastMessage.name,
+          profile: { ...(conversation.lastMessage.profile || {}), ...nextProfile, id }
+        }
+      : conversation.lastMessage
+  }));
+
+  renderMembers(latestUsers);
+  renderDirectMessages();
+  renderMessages();
+  renderVoicePanel();
+}
+
 function updateAudioButtons() {
   muteButton.classList.toggle("active", isMuted);
   deafenButton.classList.toggle("active", isDeafened);
@@ -432,7 +517,7 @@ function updateAudioButtons() {
 }
 
 function renderMembers(users) {
-  const activeUsers = users.length ? users : [{ id: userId, name: displayName() }];
+  const activeUsers = users.length ? users : [{ id: userId, name: displayName(), avatar: profile.avatar, presence: profile.presence, status: profile.status, color: profile.color }];
   latestUsers = activeUsers;
   onlineText.textContent = String(activeUsers.length);
   members.replaceChildren();
@@ -595,20 +680,22 @@ function updateVoiceUi() {
 }
 
 function renderMessage(message) {
+  const messageProfile = liveMessageProfile(message);
+  const messageName = messageProfile.name || message.name;
   const item = document.createElement("li");
   item.className = "message";
   item.dataset.id = message.id;
-  if (message.name === currentName()) item.classList.add("mine");
+  if (message.userId === userId) item.classList.add("mine");
 
   const avatar = document.createElement("div");
   avatar.className = "avatar message-avatar";
-  if (message.profile?.avatar) {
+  if (messageProfile.avatar) {
     const image = document.createElement("img");
-    image.src = message.profile.avatar;
-    image.alt = message.name;
+    image.src = messageProfile.avatar;
+    image.alt = messageName;
     avatar.append(image);
   } else {
-    avatar.textContent = initials(message.name);
+    avatar.textContent = initials(messageName);
   }
 
   const meta = document.createElement("div");
@@ -616,14 +703,14 @@ function renderMessage(message) {
 
   const name = document.createElement("span");
   name.className = "message-name";
-  name.textContent = message.name;
-  name.style.color = message.profile?.roleColor || message.profile?.color || "";
+  name.textContent = messageName;
+  name.style.color = messageProfile.roleColor || messageProfile.color || "";
 
-  if (message.profile?.roleName) {
+  if (messageProfile.roleName) {
     const role = document.createElement("span");
     role.className = "role-pill";
-    role.textContent = message.profile.roleName;
-    role.style.color = message.profile.roleColor;
+    role.textContent = messageProfile.roleName;
+    role.style.color = messageProfile.roleColor;
     name.append(role);
   }
 
@@ -1152,6 +1239,9 @@ function renderVoicePanel() {
     if (!cards.length) cards.push({ kind: "audio", stream: null });
 
     cards.forEach(({ kind, stream }) => {
+      const liveUserProfile = profileById(user.id) || {};
+      const userName = liveUserProfile.name || user.name;
+      const userAvatar = avatarForUser(user.id, user.avatar || "");
       const card = document.createElement("article");
       card.className = `voice-card ${kind}`;
       card.id = cardId(user.id, kind);
@@ -1170,20 +1260,20 @@ function renderVoicePanel() {
       } else {
         const avatar = document.createElement("div");
         avatar.className = "voice-avatar";
-        if (user.avatar) {
+        if (userAvatar) {
           const image = document.createElement("img");
-          image.src = user.avatar;
-          image.alt = user.name;
+          image.src = userAvatar;
+          image.alt = userName;
           avatar.append(image);
         } else {
-          avatar.textContent = initials(user.name);
+          avatar.textContent = initials(userName);
         }
         card.append(avatar);
       }
 
       const footer = document.createElement("footer");
       footer.innerHTML = `<strong></strong><span></span>`;
-      footer.querySelector("strong").textContent = user.id === userId ? `${user.name} (tu)` : user.name;
+      footer.querySelector("strong").textContent = user.id === userId ? `${userName} (tu)` : userName;
       const badges = [
         user.muted ? "muteado" : "",
         user.deafened ? "deafened" : "",
@@ -1596,6 +1686,13 @@ function connectEvents() {
 
   events.addEventListener("presence", event => {
     renderMembers(JSON.parse(event.data));
+    renderDirectMessages();
+    renderMessages();
+    renderVoicePanel();
+  });
+
+  events.addEventListener("profile-update", event => {
+    applyProfileUpdate(JSON.parse(event.data));
   });
 
 }
@@ -1911,6 +2008,9 @@ saveSettingsButton.addEventListener("click", async () => {
     const result = await response.json().catch(() => ({}));
     window.alert(result.error || "No se pudo guardar el perfil.");
     return;
+  }
+  if (response?.ok) {
+    applyProfileUpdate({ id: userId, profile: await response.json() });
   }
   sendPresence();
 });
