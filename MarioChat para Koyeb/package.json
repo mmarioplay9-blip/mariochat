@@ -6,6 +6,9 @@
   "engines": {
     "node": ">=20"
   },
+  "dependencies": {
+    "socket.io": "^4.7.5"
+  },
   "scripts": {
     "start": "node server.js"
   }
