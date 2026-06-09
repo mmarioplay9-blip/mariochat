@@ -4,13 +4,21 @@ const messageForm = document.querySelector("#messageForm");
 const messagesList = document.querySelector("#messages");
 const connectionStatus = document.querySelector("#connectionStatus");
 const onlineText = document.querySelector("#onlineText");
+const rightSpeakingCount = document.querySelector("#rightSpeakingCount");
+const rightVoiceCount = document.querySelector("#rightVoiceCount");
 const profileAvatar = document.querySelector("#profileAvatar");
 const members = document.querySelector("#members");
 const guildName = document.querySelector("#guildName");
 const channelName = document.querySelector("#channelName");
 const channelTopic = document.querySelector("#channelTopic");
+const channelHeaderTopic = document.querySelector("#channelHeaderTopic");
+const headerOnlineCount = document.querySelector("#headerOnlineCount");
+const headerVoiceCount = document.querySelector("#headerVoiceCount");
+const headerTodayCount = document.querySelector("#headerTodayCount");
 const textChannels = document.querySelector("#textChannels");
 const voiceChannels = document.querySelector("#voiceChannels");
+const chatBadge = document.querySelector("#chatBadge");
+const notificationBadge = document.querySelector("#notificationBadge");
 const addServerButton = document.querySelector("#addServerButton");
 const addTextChannelButton = document.querySelector("#addTextChannelButton");
 const addVoiceChannelButton = document.querySelector("#addVoiceChannelButton");
@@ -41,6 +49,14 @@ const saveSettingsButton = document.querySelector("#saveSettingsButton");
 const muteStatus = document.querySelector("#muteStatus");
 const deafenStatus = document.querySelector("#deafenStatus");
 const chatLayout = document.querySelector(".chat-layout");
+const commandDeck = document.querySelector("#commandDeck");
+const deckTitle = document.querySelector("#deckTitle");
+const deckSubtitle = document.querySelector("#deckSubtitle");
+const deckOnlineCount = document.querySelector("#deckOnlineCount");
+const deckVoiceCount = document.querySelector("#deckVoiceCount");
+const deckVoiceChannel = document.querySelector("#deckVoiceChannel");
+const deckFeaturedChannel = document.querySelector("#deckFeaturedChannel");
+const deckFeaturedMeta = document.querySelector("#deckFeaturedMeta");
 const voiceConnection = document.querySelector("#voiceConnection");
 const voiceStatus = document.querySelector("#voiceStatus");
 const voiceChannelName = document.querySelector("#voiceChannelName");
@@ -359,6 +375,24 @@ function renderDirectMessages() {
   });
 }
 
+function renderNotificationBadges() {
+  const channelUnread = conversations
+    .filter(conversation => conversation.type === "channel")
+    .reduce((total, conversation) => total + Number(conversation.unreadCount || 0), 0);
+  const dmUnread = conversations
+    .filter(conversation => conversation.type === "dm")
+    .reduce((total, conversation) => total + Number(conversation.unreadCount || 0), 0);
+
+  if (chatBadge) {
+    chatBadge.hidden = channelUnread <= 0;
+    chatBadge.textContent = channelUnread > 99 ? "99+" : String(channelUnread);
+  }
+  if (notificationBadge) {
+    notificationBadge.hidden = dmUnread <= 0;
+    notificationBadge.textContent = dmUnread > 99 ? "99+" : String(dmUnread);
+  }
+}
+
 function updateProfile() {
   const name = displayName();
   const shortName = initials(name);
@@ -449,6 +483,61 @@ function renderMembers(users) {
     members.append(item);
   });
   syncVoicePeers();
+  renderCommandDeck();
+}
+
+function renderCommandDeck() {
+  if (!commandDeck) return;
+  const guild = guilds[currentGuild] || guilds.mariochat;
+  const voiceUsers = latestUsers.filter(user => user.voiceGuild === currentGuild && user.voiceChannel);
+  const currentVoiceUsers = currentVoiceChannel
+    ? latestUsers.filter(user => user.voiceGuild === currentGuild && user.voiceChannel === currentVoiceChannel)
+    : voiceUsers;
+  const lastCurrentMessage = messageHistory
+    .filter(message => message.type !== "dm" && messageGuild(message) === currentGuild && messageChannel(message) === currentChannel)
+    .slice(-1)[0];
+
+  deckTitle.textContent = currentMode === "dm" && dmPeer ? `@ ${dmPeer.name}` : `# ${currentChannel}`;
+  deckSubtitle.textContent = currentMode === "dm"
+    ? "Canal privado con enfoque directo y baja latencia."
+    : guild.topic || "Actividad en vivo, voz y canales destacados.";
+  deckOnlineCount.textContent = `${latestUsers.length || 1} online`;
+  deckVoiceCount.textContent = `${currentVoiceUsers.length} en voz`;
+  deckVoiceChannel.textContent = currentVoiceChannel
+    ? `Conectado a ${currentVoiceChannel}`
+    : (voiceUsers[0] ? `${voiceUsers[0].voiceChannel} esta activo` : "Sin llamada activa");
+  deckFeaturedChannel.textContent = `# ${currentChannel}`;
+  deckFeaturedMeta.textContent = lastCurrentMessage
+    ? `${lastCurrentMessage.name}: ${String(lastCurrentMessage.text || "archivo").slice(0, 42)}`
+    : `${guild.text?.length || 1} canales de texto / ${guild.voice?.length || 0} salas de voz`;
+  renderChannelMetrics();
+}
+
+function renderChannelMetrics() {
+  const guild = guilds[currentGuild] || guilds.mariochat;
+  const now = new Date();
+  const todayKey = now.toISOString().slice(0, 10);
+  const todayMessages = messageHistory.filter(message => {
+    if (String(message.time || "").slice(0, 10) !== todayKey) return false;
+    if (message.type === "dm") {
+      return currentMode === "dm" && dmPeer &&
+        ((message.userId === userId && message.to === dmPeer.id) || (message.userId === dmPeer.id && message.to === userId));
+    }
+    return messageGuild(message) === currentGuild && messageChannel(message) === currentChannel;
+  });
+  const voiceUsers = latestUsers.filter(user => user.voiceGuild === currentGuild && user.voiceChannel);
+  const speakingUsers = latestUsers.filter(user => user.voiceGuild === currentGuild && user.speaking);
+
+  if (channelHeaderTopic) {
+    channelHeaderTopic.textContent = currentMode === "dm" && dmPeer
+      ? "Conversacion privada"
+      : (guild.topic || "Comunidad MarioCore");
+  }
+  if (headerOnlineCount) headerOnlineCount.textContent = String(latestUsers.length || 1);
+  if (headerVoiceCount) headerVoiceCount.textContent = String(voiceUsers.length);
+  if (headerTodayCount) headerTodayCount.textContent = String(todayMessages.length);
+  if (rightSpeakingCount) rightSpeakingCount.textContent = String(speakingUsers.length);
+  if (rightVoiceCount) rightVoiceCount.textContent = String(voiceUsers.length);
 }
 
 function createChannelButton(channel, type) {
@@ -490,6 +579,7 @@ function renderChannels() {
   const guild = guilds[currentGuild] || guilds.mariochat;
   textChannels.replaceChildren(...guild.text.map(channel => createChannelButton(channel, "text")));
   voiceChannels.replaceChildren(...guild.voice.map(channel => createChannelButton(channel, "voice")));
+  renderCommandDeck();
 }
 
 function updateVoiceUi() {
@@ -654,11 +744,26 @@ function renderMessages() {
       currentMode === "dm" ? `No hay mensajes privados con ${dmPeer?.name || "usuario"}.` : `No hay mensajes en #${currentChannel}.`;
     messagesList.append(emptyItem);
   } else {
-    visibleMessages.forEach(renderMessage);
+    let lastDateLabel = "";
+    visibleMessages.forEach(message => {
+      const date = new Date(message.time);
+      const dateLabel = Number.isNaN(date.getTime())
+        ? ""
+        : date.toLocaleDateString("es", { weekday: "short", day: "2-digit", month: "short" });
+      if (dateLabel && dateLabel !== lastDateLabel) {
+        lastDateLabel = dateLabel;
+        const separator = document.createElement("li");
+        separator.className = "date-separator";
+        separator.textContent = dateLabel;
+        messagesList.append(separator);
+      }
+      renderMessage(message);
+    });
   }
 
   loadMoreButton.hidden = !hasMoreHistory;
   messagesList.scrollTop = messagesList.scrollHeight;
+  renderCommandDeck();
 }
 
 function persistCustomGuilds() {
@@ -699,6 +804,7 @@ function applyConversations(nextConversations) {
   conversations = Array.isArray(nextConversations) ? nextConversations : [];
   renderChannels();
   renderDirectMessages();
+  renderNotificationBadges();
 }
 
 async function loadMessages(options = {}) {
@@ -835,6 +941,7 @@ function setCurrentChannel(channel) {
   activeConversationId = "";
   renderMessages();
   loadMessages();
+  renderCommandDeck();
 }
 
 function openDirectMessage(user) {
@@ -847,6 +954,7 @@ function openDirectMessage(user) {
   activeConversationId = "";
   renderMessages();
   loadMessages();
+  renderCommandDeck();
 }
 
 function setConnected(isConnected) {
@@ -1496,6 +1604,18 @@ document.querySelector(".server-rail").addEventListener("click", event => {
   const button = event.target.closest(".server-button[data-guild]");
   if (!button) return;
   setCurrentGuild(button.dataset.guild);
+});
+
+document.addEventListener("pointerdown", event => {
+  const button = event.target.closest("button, .reaction-button, .channel, .dm-item");
+  if (!button || button.disabled) return;
+  const rect = button.getBoundingClientRect();
+  const ripple = document.createElement("span");
+  ripple.className = "ui-ripple";
+  ripple.style.left = `${event.clientX - rect.left}px`;
+  ripple.style.top = `${event.clientY - rect.top}px`;
+  button.append(ripple);
+  window.setTimeout(() => ripple.remove(), 620);
 });
 
 addServerButton.addEventListener("click", () => {

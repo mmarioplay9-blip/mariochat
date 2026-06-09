@@ -27,6 +27,7 @@
           <div class="group-title">
             <span aria-hidden="true">v</span>
             <span>Canales de texto</span>
+            <span class="nav-badge" id="chatBadge" hidden>0</span>
             <button class="mini-action" id="addTextChannelButton" type="button" title="Crear canal de texto" aria-label="Crear canal de texto">+</button>
           </div>
           <div id="textChannels"></div>
@@ -45,6 +46,7 @@
           <div class="group-title">
             <span aria-hidden="true">@</span>
             <span>Mensajes Directos</span>
+            <span class="nav-badge" id="notificationBadge" hidden>0</span>
           </div>
           <label class="dm-search" aria-label="Buscar conversaciones">
             <input id="dmSearchInput" type="search" placeholder="Buscar DM">
@@ -84,9 +86,17 @@
         <header class="chat-topbar">
           <div class="channel-title">
             <span class="hash">#</span>
-            <strong id="channelName">general</strong>
+            <span class="channel-heading">
+              <strong id="channelName">general</strong>
+              <small id="channelHeaderTopic">Habla de lo que quieras</small>
+            </span>
           </div>
           <p id="channelTopic">Chat local en tiempo real</p>
+          <div class="channel-stats" aria-label="Estado del canal">
+            <span><strong id="headerOnlineCount">1</strong> conectados</span>
+            <span><strong id="headerVoiceCount">0</strong> en llamada</span>
+            <span><strong id="headerTodayCount">0</strong> hoy</span>
+          </div>
           <div class="topbar-actions" aria-label="Acciones">
             <button class="topbar-button" id="inviteButton" type="button" title="Copiar invitacion" aria-label="Copiar invitacion">Invitar</button>
             <button class="topbar-button" id="exportJsonButton" type="button" title="Exportar conversacion JSON" aria-label="Exportar conversacion JSON">JSON</button>
@@ -133,6 +143,30 @@
 
         <div class="chat-layout">
           <section class="message-column" aria-label="Mensajes">
+            <section class="command-deck" id="commandDeck" aria-label="Resumen del servidor">
+              <div class="deck-hero">
+                <span class="deck-kicker">Centro de mando</span>
+                <strong id="deckTitle"># general</strong>
+                <p id="deckSubtitle">Actividad en vivo, voz y canales destacados.</p>
+              </div>
+              <div class="deck-grid">
+                <article class="deck-card signal-card">
+                  <span class="deck-label">Senal</span>
+                  <strong id="deckOnlineCount">1 online</strong>
+                  <div class="signal-meter" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+                </article>
+                <article class="deck-card">
+                  <span class="deck-label">Voz activa</span>
+                  <strong id="deckVoiceCount">0 usuarios</strong>
+                  <p id="deckVoiceChannel">Sin llamada activa</p>
+                </article>
+                <article class="deck-card">
+                  <span class="deck-label">Canal destacado</span>
+                  <strong id="deckFeaturedChannel"># general</strong>
+                  <p id="deckFeaturedMeta">Listo para conversar</p>
+                </article>
+              </div>
+            </section>
             <div class="search-panel" id="searchPanel" hidden>
               <input id="searchUserInput" placeholder="Usuario">
               <input id="searchFromInput" type="date" aria-label="Desde">
@@ -157,7 +191,14 @@
           </section>
 
           <aside class="member-list" aria-label="Miembros">
-            <h2>En linea - <span id="onlineText">1</span></h2>
+            <header class="member-panel-header">
+              <span>Comunidad activa</span>
+              <strong><span id="onlineText">1</span> online</strong>
+            </header>
+            <div class="member-activity-strip" aria-label="Actividad de voz">
+              <span><strong id="rightSpeakingCount">0</strong> hablando</span>
+              <span><strong id="rightVoiceCount">0</strong> en voz</span>
+            </div>
             <div id="members"></div>
           </aside>
         </div>

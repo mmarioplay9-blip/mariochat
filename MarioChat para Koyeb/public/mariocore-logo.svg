@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="MarioCore">
+  <defs>
+    <radialGradient id="bg" cx="34%" cy="24%" r="78%">
+      <stop offset="0" stop-color="#1cb8ff"/>
+      <stop offset="0.52" stop-color="#0b57ff"/>
+      <stop offset="1" stop-color="#041044"/>
+    </radialGradient>
+    <linearGradient id="stroke" x1="18" y1="18" x2="104" y2="102">
+      <stop offset="0" stop-color="#69ffff"/>
+      <stop offset="0.48" stop-color="#0d83ff"/>
+      <stop offset="1" stop-color="#57ffbf"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="23" y1="28" x2="100" y2="94">
+      <stop offset="0" stop-color="#7dffff"/>
+      <stop offset="0.38" stop-color="#08c8ff"/>
+      <stop offset="0.7" stop-color="#1264ff"/>
+      <stop offset="1" stop-color="#59ffca"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.05 0 0 0 0 0.65 0 0 0 0 1 0 0 0 0.75 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <circle cx="60" cy="60" r="54" fill="url(#bg)" stroke="url(#stroke)" stroke-width="4"/>
+  <path filter="url(#glow)" fill="none" stroke="url(#mark)" stroke-width="10" stroke-linejoin="miter" stroke-linecap="square"
+    d="M27 88V34l32 28 32-28v22l-20 16 20 16v-2"/>
+  <path filter="url(#glow)" fill="none" stroke="#07135a" stroke-width="4" stroke-linejoin="miter" stroke-linecap="square"
+    d="M37 86V56l22 19 22-19"/>
+</svg>
