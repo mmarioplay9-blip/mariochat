@@ -40,6 +40,7 @@ const clearSearchButton = document.querySelector("#clearSearchButton");
 const loadMoreButton = document.querySelector("#loadMoreButton");
 const typingIndicator = document.querySelector("#typingIndicator");
 const emojiButton = document.querySelector("#emojiButton");
+const emojiPicker = document.querySelector("#emojiPicker");
 const muteButton = document.querySelector("#muteButton");
 const deafenButton = document.querySelector("#deafenButton");
 const settingsButton = document.querySelector("#settingsButton");
@@ -72,6 +73,17 @@ const callDeafenButton = document.querySelector("#callDeafenButton");
 const cameraButton = document.querySelector("#cameraButton");
 const screenShareButton = document.querySelector("#screenShareButton");
 const hangupButton = document.querySelector("#hangupButton");
+const screenShareDialog = document.querySelector("#screenShareDialog");
+const screenSourceList = document.querySelector("#screenSourceList");
+const screenShareStatus = document.querySelector("#screenShareStatus");
+const screenSelectedPreview = document.querySelector("#screenSelectedPreview");
+const screenSelectedImage = document.querySelector("#screenSelectedImage");
+const screenSelectedName = document.querySelector("#screenSelectedName");
+const screenSelectedType = document.querySelector("#screenSelectedType");
+const screenShareCancelButton = document.querySelector("#screenShareCancelButton");
+const screenShareConfirmButton = document.querySelector("#screenShareConfirmButton");
+const voiceToast = document.querySelector("#voiceToast");
+const voiceToastText = document.querySelector("#voiceToastText");
 const attachButton = document.querySelector("#attachButton");
 const fileInput = document.querySelector("#fileInput");
 const uploadProgress = document.querySelector("#uploadProgress");
@@ -187,7 +199,9 @@ let voiceSocket = null;
 let isCameraOn = false;
 let isScreenSharing = false;
 let lastSpeakingState = false;
+let lastSpeakingDetectedAt = 0;
 let speakingTimer = 0;
+let voiceToastTimer = 0;
 let peerConfig = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
 };
@@ -498,6 +512,10 @@ function updateAudioButtons() {
   deafenButton.classList.toggle("active", isDeafened);
   callMuteButton.classList.toggle("active", isMuted);
   callDeafenButton.classList.toggle("active", isDeafened);
+  callMuteButton.classList.toggle("enabled", !isMuted);
+  callDeafenButton.classList.toggle("enabled", !isDeafened);
+  callMuteButton.setAttribute("aria-pressed", String(!isMuted));
+  callDeafenButton.setAttribute("aria-pressed", String(!isDeafened));
   muteStatus.textContent = isMuted ? "Silenciado" : "Activo";
   deafenStatus.textContent = isDeafened ? "Desactivado" : "Activo";
   if (localVoiceStream) {
@@ -518,8 +536,33 @@ function updateAudioButtons() {
 
 function renderMembers(users) {
   const activeUsers = users.length ? users : [{ id: userId, name: displayName(), avatar: profile.avatar, presence: profile.presence, status: profile.status, color: profile.color }];
+  const memberSignature = JSON.stringify({
+    guild: currentGuild,
+    users: activeUsers.map(user => ({
+      id: user.id,
+      name: user.name,
+      avatar: user.avatar || "",
+      presence: user.presence || "",
+      status: user.status || "",
+      roleColor: user.roleColor || "",
+      color: user.color || "",
+      voiceChannel: user.voiceChannel || "",
+      voiceGuild: user.voiceGuild || "",
+      muted: Boolean(user.muted),
+      deafened: Boolean(user.deafened),
+      cameraOn: Boolean(user.cameraOn),
+      screenSharing: Boolean(user.screenSharing),
+      speaking: Boolean(user.speaking)
+    }))
+  });
   latestUsers = activeUsers;
   onlineText.textContent = String(activeUsers.length);
+  if (renderMembers.lastSignature === memberSignature) {
+    syncVoicePeers();
+    renderCommandDeck();
+    return;
+  }
+  renderMembers.lastSignature = memberSignature;
   members.replaceChildren();
 
   activeUsers.forEach(user => {
@@ -662,6 +705,26 @@ function createChannelButton(channel, type) {
 
 function renderChannels() {
   const guild = guilds[currentGuild] || guilds.mariochat;
+  const channelSignature = JSON.stringify({
+    guild: currentGuild,
+    text: guild.text,
+    voice: guild.voice,
+    currentChannel,
+    currentVoiceChannel,
+    lockedChannels: appState.lockedChannels || {},
+    conversations: conversations
+      .filter(item => item.type === "channel" && item.id?.startsWith(`channel:${currentGuild}:`))
+      .map(item => ({
+        id: item.id,
+        unreadCount: item.unreadCount || 0,
+        lastText: item.lastMessage?.text || ""
+      }))
+  });
+  if (renderChannels.lastSignature === channelSignature) {
+    renderCommandDeck();
+    return;
+  }
+  renderChannels.lastSignature = channelSignature;
   textChannels.replaceChildren(...guild.text.map(channel => createChannelButton(channel, "text")));
   voiceChannels.replaceChildren(...guild.voice.map(channel => createChannelButton(channel, "voice")));
   renderCommandDeck();
@@ -686,6 +749,16 @@ function renderMessage(message) {
   item.className = "message";
   item.dataset.id = message.id;
   if (message.userId === userId) item.classList.add("mine");
+
+  const moreButton = document.createElement("button");
+  moreButton.className = "message-more-button";
+  moreButton.type = "button";
+  moreButton.dataset.action = "toggle-message-actions";
+  moreButton.dataset.messageId = message.id;
+  moreButton.title = "Opciones del mensaje";
+  moreButton.setAttribute("aria-label", "Opciones del mensaje");
+  moreButton.setAttribute("aria-expanded", "false");
+  moreButton.textContent = "...";
 
   const avatar = document.createElement("div");
   avatar.className = "avatar message-avatar";
@@ -723,7 +796,7 @@ function renderMessage(message) {
   text.textContent = message.text;
 
   meta.append(name, time);
-  item.append(avatar, meta, text);
+  item.append(moreButton, avatar, meta, text);
   const attachments = message.attachments?.length ? message.attachments : (message.attachment ? [message.attachment] : []);
   attachments.forEach(file => {
     const attachment = document.createElement("div");
@@ -761,6 +834,7 @@ function renderMessage(message) {
 
   const actions = document.createElement("div");
   actions.className = "message-actions";
+  actions.hidden = true;
   ["like", "fire", "haha"].forEach(emoji => {
     const button = document.createElement("button");
     button.className = "reaction-button";
@@ -797,7 +871,6 @@ function renderMessage(message) {
 }
 
 function renderMessages() {
-  messagesList.replaceChildren();
   const filters = searchParams();
   const query = filters.q.toLowerCase();
   const userQuery = filters.user.toLowerCase();
@@ -823,6 +896,30 @@ function renderMessages() {
       const messageTime = new Date(message.time).getTime();
       return (!fromTime || messageTime >= fromTime) && (!toTime || messageTime <= toTime);
     });
+  const messageSignature = JSON.stringify({
+    conversationId: currentConversationId(),
+    filters,
+    hasMoreHistory,
+    messages: visibleMessages.map(message => ({
+      id: message.id,
+      text: message.text || "",
+      time: message.time || "",
+      editedAt: message.editedAt || "",
+      userId: message.userId || "",
+      name: message.name || "",
+      readBy: message.readBy || [],
+      reactions: message.reactions || {},
+      attachment: message.attachment || null,
+      attachments: message.attachments || []
+    }))
+  });
+  if (renderMessages.lastSignature === messageSignature) {
+    loadMoreButton.hidden = !hasMoreHistory;
+    renderCommandDeck();
+    return;
+  }
+  renderMessages.lastSignature = messageSignature;
+  messagesList.replaceChildren();
 
   if (!visibleMessages.length) {
     const emptyItem = document.createElement("li");
@@ -888,7 +985,29 @@ function mergeMessages(nextMessages) {
 }
 
 function applyConversations(nextConversations) {
-  conversations = Array.isArray(nextConversations) ? nextConversations : [];
+  const nextList = Array.isArray(nextConversations) ? nextConversations : [];
+  const conversationSignature = JSON.stringify(nextList.map(conversation => ({
+    id: conversation.id,
+    type: conversation.type,
+    updatedAt: conversation.updatedAt || "",
+    unreadCount: conversation.unreadCount || 0,
+    participants: conversation.participants || [],
+    lastMessage: conversation.lastMessage ? {
+      id: conversation.lastMessage.id,
+      userId: conversation.lastMessage.userId,
+      name: conversation.lastMessage.name,
+      text: conversation.lastMessage.text || "",
+      time: conversation.lastMessage.time || "",
+      attachment: conversation.lastMessage.attachment || null,
+      attachments: conversation.lastMessage.attachments || []
+    } : null
+  })));
+  conversations = nextList;
+  if (applyConversations.lastSignature === conversationSignature) {
+    renderNotificationBadges();
+    return;
+  }
+  applyConversations.lastSignature = conversationSignature;
   renderChannels();
   renderDirectMessages();
   renderNotificationBadges();
@@ -1181,8 +1300,185 @@ function requestJson(method, url, payload, onUploadProgress = () => {}) {
 }
 
 function showVoiceError(message) {
-  voiceErrorText.textContent = message || "";
-  voiceErrorText.hidden = !message;
+  voiceErrorText.textContent = "";
+  voiceErrorText.hidden = true;
+  window.clearTimeout(voiceToastTimer);
+  if (!voiceToast || !voiceToastText || !message) {
+    if (voiceToast) voiceToast.hidden = true;
+    return;
+  }
+  voiceToastText.textContent = message;
+  voiceToast.hidden = false;
+  voiceToast.classList.remove("leaving");
+  voiceToast.classList.add("visible");
+  voiceToastTimer = window.setTimeout(() => {
+    voiceToast.classList.add("leaving");
+    voiceToastTimer = window.setTimeout(() => {
+      voiceToast.hidden = true;
+      voiceToast.classList.remove("visible", "leaving");
+    }, 220);
+  }, 3600);
+}
+
+function openScreenShareDialog() {
+  if (!screenShareDialog || typeof screenShareDialog.showModal !== "function" || screenShareDialog.open) return;
+  screenShareDialog.classList.remove("closing");
+  screenShareDialog.showModal();
+}
+
+function closeScreenShareDialog() {
+  if (!screenShareDialog || !screenShareDialog.open) return;
+  if (screenShareDialog.classList.contains("closing")) return;
+  screenShareDialog.classList.add("closing");
+  window.setTimeout(() => {
+    if (screenShareDialog.open) screenShareDialog.close();
+    screenShareDialog.classList.remove("closing");
+  }, 160);
+}
+
+function desktopScreenPicker() {
+  return window.marioChatDesktop &&
+    typeof window.marioChatDesktop.listDisplaySources === "function" &&
+    typeof window.marioChatDesktop.selectDisplaySource === "function";
+}
+
+function screenSourceType(source = {}) {
+  const id = String(source.id || "").toLowerCase();
+  const name = String(source.name || "").toLowerCase();
+  if (id.includes("screen") || name.includes("screen") || name.includes("pantalla")) return "screen";
+  if (id.includes("tab") || name.includes("tab") || name.includes("pestana") || name.includes("pestaña")) return "tab";
+  return "window";
+}
+
+function screenSourceLabel(type) {
+  if (type === "screen") return "Pantalla completa";
+  if (type === "tab") return "Pestana";
+  return "Ventana";
+}
+
+function renderScreenSourceSkeletons() {
+  if (!screenSourceList) return;
+  screenSourceList.hidden = false;
+  screenSourceList.replaceChildren();
+  for (let index = 0; index < 4; index += 1) {
+    const skeleton = document.createElement("div");
+    skeleton.className = "screen-source-skeleton";
+    skeleton.innerHTML = "<span></span><strong></strong><small></small>";
+    screenSourceList.append(skeleton);
+  }
+}
+
+async function chooseDesktopScreenSource() {
+  if (!desktopScreenPicker()) {
+    openScreenShareDialog();
+    return true;
+  }
+
+  openScreenShareDialog();
+  if (!screenSourceList || !screenShareDialog) return false;
+
+  if (screenShareStatus) {
+    screenShareStatus.textContent = "Cargando pantallas disponibles...";
+    screenShareStatus.dataset.state = "loading";
+  }
+  if (screenSelectedPreview) screenSelectedPreview.hidden = true;
+  if (screenSelectedImage) screenSelectedImage.removeAttribute("src");
+  if (screenSelectedName) screenSelectedName.textContent = "";
+  if (screenSelectedType) screenSelectedType.textContent = "";
+  if (screenShareConfirmButton) screenShareConfirmButton.disabled = true;
+  renderScreenSourceSkeletons();
+
+  const sources = await window.marioChatDesktop.listDisplaySources().catch(() => []);
+  screenSourceList.replaceChildren();
+  screenSourceList.dataset.count = String(sources.length);
+  if (screenShareStatus) {
+    screenShareStatus.textContent = sources.length
+      ? "Selecciona una tarjeta para continuar."
+      : "No se encontraron pantallas disponibles";
+    screenShareStatus.dataset.state = sources.length ? "ready" : "empty";
+  }
+
+  if (!sources.length) {
+    const empty = document.createElement("div");
+    empty.className = "screen-source-empty";
+    empty.textContent = "No se encontraron pantallas disponibles";
+    screenSourceList.append(empty);
+  }
+
+  return new Promise(resolve => {
+    let settled = false;
+    let selectedSourceId = "";
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      screenShareDialog.removeEventListener("close", onClose);
+      if (screenShareCancelButton) screenShareCancelButton.removeEventListener("click", onCancel);
+      if (screenShareConfirmButton) screenShareConfirmButton.removeEventListener("click", onConfirm);
+      resolve(value);
+    };
+    const onClose = () => finish(false);
+    const onCancel = () => closeScreenShareDialog();
+    const onConfirm = async () => {
+      if (!selectedSourceId) {
+        showVoiceError("Selecciona una pantalla antes de compartir.");
+        return;
+      }
+      if (screenShareConfirmButton) screenShareConfirmButton.disabled = true;
+      const selected = await window.marioChatDesktop.selectDisplaySource(selectedSourceId).catch(() => false);
+      if (!selected) {
+        if (screenShareConfirmButton) screenShareConfirmButton.disabled = false;
+        showVoiceError("No se pudo seleccionar esa pantalla.");
+        return;
+      }
+      finish(true);
+    };
+
+    screenShareDialog.addEventListener("close", onClose);
+    if (screenShareCancelButton) screenShareCancelButton.addEventListener("click", onCancel);
+    if (screenShareConfirmButton) screenShareConfirmButton.addEventListener("click", onConfirm);
+    sources.forEach(source => {
+      const type = screenSourceType(source);
+      const button = document.createElement("button");
+      button.className = "screen-source-option";
+      button.type = "button";
+      button.innerHTML = `
+        <span class="screen-source-preview">
+          <img alt="">
+          <span class="screen-source-type" aria-hidden="true"></span>
+          <span class="screen-source-badge">✓ Seleccionado</span>
+        </span>
+        <span class="screen-source-meta">
+          <strong></strong>
+          <small></small>
+        </span>
+      `;
+      button.querySelector("img").src = source.thumbnail;
+      button.querySelector("img").alt = source.name;
+      button.querySelector(".screen-source-type").dataset.type = type;
+      button.querySelector("strong").textContent = source.name;
+      button.querySelector("small").textContent = screenSourceLabel(type);
+      button.addEventListener("click", () => {
+        selectedSourceId = source.id;
+        screenSourceList.querySelectorAll(".screen-source-option").forEach(option => {
+          option.classList.toggle("selected", option === button);
+          option.setAttribute("aria-pressed", String(option === button));
+        });
+        if (screenSelectedPreview && screenSelectedImage && screenSelectedName && screenSelectedType) {
+          screenSelectedImage.src = source.thumbnail;
+          screenSelectedImage.alt = source.name;
+          screenSelectedName.textContent = source.name;
+          screenSelectedType.textContent = screenSourceLabel(type);
+          screenSelectedPreview.hidden = false;
+        }
+        if (screenShareStatus) {
+          screenShareStatus.textContent = "Revisa la vista completa y confirma cuando estes listo.";
+          screenShareStatus.dataset.state = "selected";
+        }
+        if (screenShareConfirmButton) screenShareConfirmButton.disabled = false;
+      });
+      screenSourceList.append(button);
+    });
+  });
 }
 
 function currentVoiceRoomUsers() {
@@ -1223,13 +1519,24 @@ function renderVoicePanel() {
   callChannelTitle.textContent = currentVoiceChannel ? `Voz: ${currentVoiceChannel}` : "Sala de voz";
   const users = currentVoiceChannel ? [localVoiceUser(), ...currentVoiceRoomUsers().filter(user => user.id !== userId)] : [];
   callParticipantCount.textContent = `${users.length} conectado${users.length === 1 ? "" : "s"}`;
+  const hasScreenShare = users.some(user => user.screenSharing);
+  voiceCallPanel.classList.toggle("screen-mode", hasScreenShare);
+  voiceCallPanel.dataset.participants = String(Math.min(users.length, 8));
   callMuteButton.classList.toggle("active", isMuted);
   callDeafenButton.classList.toggle("active", isDeafened);
+  callMuteButton.classList.toggle("enabled", !isMuted);
+  callDeafenButton.classList.toggle("enabled", !isDeafened);
   cameraButton.classList.toggle("active", isCameraOn);
   screenShareButton.classList.toggle("active", isScreenSharing);
+  callMuteButton.setAttribute("aria-pressed", String(!isMuted));
+  callDeafenButton.setAttribute("aria-pressed", String(!isDeafened));
+  cameraButton.setAttribute("aria-pressed", String(isCameraOn));
+  screenShareButton.setAttribute("aria-pressed", String(isScreenSharing));
 
-  voiceStage.classList.toggle("has-screen", users.some(user => user.screenSharing));
-  voiceStage.replaceChildren();
+  voiceStage.classList.toggle("has-screen", hasScreenShare);
+  voiceStage.dataset.count = String(Math.min(users.length, 8));
+  const existingCards = new Map(Array.from(voiceStage.children).map(card => [card.id, card]));
+  const nextCards = [];
 
   users.forEach(user => {
     const remote = remoteStreams.get(user.id) || new Map();
@@ -1242,22 +1549,46 @@ function renderVoicePanel() {
       const liveUserProfile = profileById(user.id) || {};
       const userName = liveUserProfile.name || user.name;
       const userAvatar = avatarForUser(user.id, user.avatar || "");
-      const card = document.createElement("article");
+      const hasVideoStream = Boolean(stream?.getVideoTracks().length);
+      const existingCard = existingCards.get(cardId(user.id, kind));
+      const existingVideo = existingCard?.querySelector(":scope > video");
+      const canReuseVideo = hasVideoStream && existingVideo?.srcObject === stream;
+      const card = canReuseVideo ? existingCard : document.createElement("article");
       card.className = `voice-card ${kind}`;
       card.id = cardId(user.id, kind);
       card.dataset.userId = user.id;
+      card.dataset.kind = kind;
+      card.dataset.status = [
+        user.muted ? "Microfono silenciado" : "Mic conectado",
+        user.cameraOn ? "camara activa" : "camara apagada",
+        user.screenSharing ? "compartiendo pantalla" : ""
+      ].filter(Boolean).join(" / ");
       card.classList.toggle("speaking", Boolean(user.speaking));
       card.classList.toggle("muted", Boolean(user.muted));
       card.classList.toggle("deafened", Boolean(user.deafened));
 
-      if (stream?.getVideoTracks().length) {
-        const video = document.createElement("video");
+      if (canReuseVideo) {
+        Array.from(card.children).forEach(child => {
+          if (child !== existingVideo) child.remove();
+        });
+      } else {
+        card.replaceChildren();
+      }
+
+      if (hasVideoStream) {
+        const video = canReuseVideo ? existingVideo : document.createElement("video");
         video.autoplay = true;
         video.playsInline = true;
         video.muted = user.id === userId || isDeafened;
-        video.srcObject = stream;
-        card.append(video);
+        if (video.srcObject !== stream) video.srcObject = stream;
+        if (!canReuseVideo) card.append(video);
       } else {
+        const avatarShell = document.createElement("div");
+        avatarShell.className = "voice-avatar-shell";
+        const orbit = document.createElement("div");
+        orbit.className = "voice-avatar-orbit";
+        orbit.setAttribute("aria-hidden", "true");
+        avatarShell.append(orbit);
         const avatar = document.createElement("div");
         avatar.className = "voice-avatar";
         if (userAvatar) {
@@ -1268,24 +1599,65 @@ function renderVoicePanel() {
         } else {
           avatar.textContent = initials(userName);
         }
-        card.append(avatar);
+        avatarShell.append(avatar);
+        const waves = document.createElement("div");
+        waves.className = "voice-audio-waves";
+        waves.setAttribute("aria-hidden", "true");
+        waves.innerHTML = "<span></span><span></span><span></span><span></span><span></span><span></span><span></span>";
+        avatarShell.append(waves);
+        card.append(avatarShell);
+      }
+
+      if (kind === "screen") {
+        const liveBadge = document.createElement("div");
+        liveBadge.className = "screen-live-badge";
+        liveBadge.textContent = "Transmitiendo pantalla";
+        card.append(liveBadge);
+        const screenMeta = document.createElement("div");
+        screenMeta.className = "screen-share-meta";
+        const voiceState = user.muted ? "Voz silenciada" : user.speaking ? "Hablando" : "Escuchando";
+        screenMeta.innerHTML = "<strong></strong><span></span><small></small>";
+        screenMeta.querySelector("strong").textContent = userName;
+        screenMeta.querySelector("span").textContent = "Calidad automatica";
+        screenMeta.querySelector("small").textContent = voiceState;
+        card.append(screenMeta);
+        if (user.id === userId) {
+          const stopButton = document.createElement("button");
+          stopButton.className = "stop-screen-share";
+          stopButton.type = "button";
+          stopButton.textContent = "Detener transmision";
+          stopButton.addEventListener("click", stopScreenShare);
+          card.append(stopButton);
+        }
       }
 
       const footer = document.createElement("footer");
-      footer.innerHTML = `<strong></strong><span></span>`;
+      footer.innerHTML = `<strong></strong><span></span><div class="voice-status-row"></div>`;
       footer.querySelector("strong").textContent = user.id === userId ? `${userName} (tu)` : userName;
-      const badges = [
-        user.muted ? "muteado" : "",
-        user.deafened ? "deafened" : "",
-        user.cameraOn ? "camara" : "",
-        user.screenSharing ? "pantalla" : "",
-        user.speaking ? "hablando" : ""
-      ].filter(Boolean);
-      footer.querySelector("span").textContent = badges.join(" / ") || "conectado";
+      const primaryStatus = user.muted
+        ? "Silenciado"
+        : user.speaking
+          ? "Hablando"
+          : "Escuchando";
+      footer.querySelector("span").textContent = primaryStatus;
+      const statusRow = footer.querySelector(".voice-status-row");
+      [
+        { label: user.muted ? "Microfono apagado" : "Microfono conectado", active: !user.muted },
+        { label: user.deafened ? "Audifonos off" : "Audifonos activos", active: !user.deafened },
+        { label: user.cameraOn ? "Camara activa" : "Camara apagada", active: user.cameraOn },
+        { label: user.screenSharing ? "Compartiendo pantalla" : "", active: user.screenSharing }
+      ].filter(item => item.label).forEach(item => {
+        const chip = document.createElement("small");
+        chip.className = item.active ? "voice-state-chip active" : "voice-state-chip";
+        chip.textContent = item.label;
+        statusRow.append(chip);
+      });
       card.append(footer);
-      voiceStage.append(card);
+      nextCards.push(card);
     });
   });
+
+  voiceStage.replaceChildren(...nextCards);
 }
 
 function emitVoiceState(eventName, payload = {}) {
@@ -1297,6 +1669,7 @@ function stopSpeakingDetection() {
   window.clearInterval(speakingTimer);
   speakingTimer = 0;
   lastSpeakingState = false;
+  lastSpeakingDetectedAt = 0;
   for (const analyser of audioAnalysers.values()) analyser?.context?.close?.().catch(() => {});
   audioAnalysers.clear();
 }
@@ -1316,12 +1689,16 @@ function startSpeakingDetection() {
   speakingTimer = window.setInterval(() => {
     analyser.getByteTimeDomainData(data);
     const volume = data.reduce((sum, value) => sum + Math.abs(value - 128), 0) / data.length;
-    const speaking = !isMuted && volume > 8;
+    const now = performance.now();
+    if (isMuted) lastSpeakingDetectedAt = 0;
+    const detectedVoice = !isMuted && volume > 8;
+    if (detectedVoice) lastSpeakingDetectedAt = now;
+    const speaking = detectedVoice || (!isMuted && lastSpeakingState && now - lastSpeakingDetectedAt < 900);
     if (speaking === lastSpeakingState) return;
     lastSpeakingState = speaking;
     emitVoiceState("user-speaking", { speaking });
     renderVoicePanel();
-  }, 180);
+  }, 100);
 }
 
 function addLocalTracks(peerId, peer) {
@@ -1525,8 +1902,19 @@ async function stopCamera() {
 
 async function startScreenShare() {
   if (!currentVoiceChannel || isScreenSharing) return;
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    showVoiceError("Tu navegador no permite compartir pantalla aqui.");
+    return;
+  }
+
   try {
+    const sourceSelected = await chooseDesktopScreenSource();
+    if (!sourceSelected) {
+      closeScreenShareDialog();
+      return;
+    }
     localScreenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    closeScreenShareDialog();
     isScreenSharing = true;
     localScreenStream.getVideoTracks()[0]?.addEventListener("ended", stopScreenShare);
     for (const [peerId, peer] of peers) {
@@ -1536,7 +1924,11 @@ async function startScreenShare() {
     emitVoiceState("screen-share-start", { screenStreamId: localScreenStream.id });
     renderVoicePanel();
   } catch (error) {
-    showVoiceError("No se pudo iniciar la transmision de pantalla.");
+    closeScreenShareDialog();
+    const permissionDenied = error?.name === "NotAllowedError";
+    showVoiceError(permissionDenied
+      ? "Se cancelo o denego el permiso para compartir pantalla."
+      : "No se pudo iniciar la transmision de pantalla.");
   }
 }
 
@@ -1686,9 +2078,6 @@ function connectEvents() {
 
   events.addEventListener("presence", event => {
     renderMembers(JSON.parse(event.data));
-    renderDirectMessages();
-    renderMessages();
-    renderVoicePanel();
   });
 
   events.addEventListener("profile-update", event => {
@@ -1904,14 +2293,122 @@ function updateProfileImageSizeLabels() {
 settingsAvatarInput.addEventListener("change", updateProfileImageSizeLabels);
 settingsBannerInput.addEventListener("change", updateProfileImageSizeLabels);
 
-emojiButton.addEventListener("click", () => {
-  const insert = " :)";
+const emojiGroups = [
+  {
+    label: "Caras",
+    emojis: "😀 😃 😄 😁 😆 😅 😂 🤣 🥲 ☺️ 😊 😇 🙂 🙃 😉 😌 😍 🥰 😘 😗 😙 😚 😋 😛 😝 😜 🤪 🤨 🧐 🤓 😎 🥸 🤩 🥳 😏 😒 😞 😔 😟 😕 🙁 ☹️ 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🫣 🤗 🫡 🤔 🫢 🤭 🤫 🤥 😶 😐 😑 😬 🫨 🫠 🙄 😯 😦 😧 😮 😲 🥱 😴 🤤 😪 😵 🫥 🤐 🥴 🤢 🤮 🤧 😷 🤒 🤕 🤑 🤠 😈 👿 👹 👺 🤡 💩 👻 💀 ☠️ 👽 👾 🤖".split(" ")
+  },
+  {
+    label: "Gestos",
+    emojis: "👋 🤚 🖐️ ✋ 🖖 🫱 🫲 🫳 🫴 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 🖕 👇 ☝️ 🫵 👍 👎 ✊ 👊 🤛 🤜 👏 🙌 🫶 👐 🤲 🤝 🙏 ✍️ 💅 🤳 💪 🦾 🦿 🦵 🦶 👂 🦻 👃 🧠 🫀 🫁 🦷 🦴 👀 👁️ 👅 👄 🫦".split(" ")
+  },
+  {
+    label: "Personas",
+    emojis: "👶 🧒 👦 👧 🧑 👱 👨 🧔 👩 🧓 👴 👵 🙍 🙎 🙅 🙆 💁 🙋 🧏 🙇 🤦 🤷 👮 🕵️ 💂 🥷 👷 🫅 🤴 👸 👳 👲 🧕 🤵 👰 🤰 🫃 🫄 🤱 👼 🎅 🤶 🧑‍🎄 🦸 🦹 🧙 🧚 🧛 🧜 🧝 🧞 🧟 🧌 💆 💇 🚶 🧍 🧎 🏃 💃 🕺 🕴️ 👯 🧖 🧗 🤺 🏇 ⛷️ 🏂 🏌️ 🏄 🚣 🏊 ⛹️ 🏋️ 🚴 🚵 🤸 🤼 🤽 🤾 🤹 🧘".split(" ")
+  },
+  {
+    label: "Corazones",
+    emojis: "💋 💌 💘 💝 💖 💗 💓 💞 💕 💟 ❣️ 💔 ❤️‍🔥 ❤️‍🩹 ❤️ 🩷 🧡 💛 💚 💙 🩵 💜 🤎 🖤 🩶 🤍 💯 💢 💥 💫 💦 💨 🕳️ 💬 👁️‍🗨️ 🗨️ 🗯️ 💭 💤".split(" ")
+  },
+  {
+    label: "Naturaleza",
+    emojis: "🌵 🎄 🌲 🌳 🌴 🪵 🌱 🌿 ☘️ 🍀 🎍 🪴 🎋 🍃 🍂 🍁 🪺 🪹 🍄 🪨 🪻 🪷 🌾 💐 🌷 🪸 🌹 🥀 🌺 🌸 🌼 🌻 🌞 🌝 🌛 🌜 🌚 🌕 🌖 🌗 🌘 🌑 🌒 🌓 🌔 🌙 🌎 🌍 🌏 🪐 💫 ⭐ 🌟 ✨ ⚡ ☄️ 💥 🔥 🌪️ 🌈 ☀️ 🌤️ ⛅ 🌥️ ☁️ 🌦️ 🌧️ ⛈️ 🌩️ 🌨️ ❄️ ☃️ ⛄ 🌬️ 💨 💧 💦 🫧 ☔ ☂️ 🌊 🌫️".split(" ")
+  },
+  {
+    label: "Comida",
+    emojis: "🍏 🍎 🍐 🍊 🍋 🍌 🍉 🍇 🍓 🫐 🍈 🍒 🍑 🥭 🍍 🥥 🥝 🍅 🫒 🥑 🍆 🥔 🥕 🌽 🌶️ 🫑 🥒 🥬 🥦 🧄 🧅 🥜 🫘 🌰 🫚 🫛 🍞 🥐 🥖 🫓 🥨 🥯 🥞 🧇 🧀 🍖 🍗 🥩 🥓 🍔 🍟 🍕 🌭 🥪 🌮 🌯 🫔 🥙 🧆 🥚 🍳 🥘 🍲 🫕 🥣 🥗 🍿 🧈 🧂 🥫 🍱 🍘 🍙 🍚 🍛 🍜 🍝 🍠 🍢 🍣 🍤 🍥 🥮 🍡 🥟 🥠 🥡 🦀 🦞 🦐 🦑 🦪 🍦 🍧 🍨 🍩 🍪 🎂 🍰 🧁 🥧 🍫 🍬 🍭 🍮 🍯 🍼 🥛 ☕ 🫖 🍵 🍶 🍾 🍷 🍸 🍹 🍺 🍻 🥂 🥃 🫗 🥤 🧋 🧃 🧉 🧊".split(" ")
+  },
+  {
+    label: "Animales",
+    emojis: "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐻‍❄️ 🐨 🐯 🦁 🐮 🐷 🐽 🐸 🐵 🙈 🙉 🙊 🐒 🐔 🐧 🐦 🐤 🐣 🐥 🦆 🦅 🦉 🦇 🐺 🐗 🐴 🦄 🫎 🐝 🪱 🐛 🦋 🐌 🐞 🐜 🪰 🪲 🪳 🦟 🦗 🕷️ 🕸️ 🦂 🐢 🐍 🦎 🦖 🦕 🐙 🦑 🦐 🦞 🦀 🪼 🪸 🐡 🐠 🐟 🐬 🐳 🐋 🦈 🐊 🐅 🐆 🦓 🦍 🦧 🦣 🐘 🦛 🦏 🐪 🐫 🦒 🦘 🦬 🐃 🐂 🐄 🫏 🐎 🐖 🐏 🐑 🦙 🐐 🦌 🐕 🐩 🦮 🐕‍🦺 🐈 🐈‍⬛ 🪶 🪽 🐓 🦃 🦤 🦚 🦜 🦢 🪿 🦩 🕊️ 🐇 🦝 🦨 🦡 🦫 🦦 🦥 🐁 🐀 🐿️ 🦔".split(" ")
+  },
+  {
+    label: "Actividades",
+    emojis: "⚽ 🏀 🏈 ⚾ 🥎 🎾 🏐 🏉 🥏 🎱 🪀 🏓 🏸 🏒 🏑 🥍 🏏 🪃 🥅 ⛳ 🪁 🛝 🏹 🎣 🤿 🥊 🥋 🎽 🛹 🛼 🛷 ⛸️ 🥌 🎿 ⛷️ 🏂 🪂 🏋️ 🤼 🤸 ⛹️ 🤺 🤾 🏌️ 🏇 🧘 🏄 🏊 🤽 🚣 🧗 🚵 🚴 🏆 🥇 🥈 🥉 🏅 🎖️ 🏵️ 🎗️ 🎫 🎟️ 🎪 🤹 🎭 🩰 🎨 🎬 🎤 🎧 🎼 🎹 🥁 🪘 🎷 🎺 🪗 🎸 🪕 🎻 🪈 🎲 ♟️ 🎯 🎳 🎮 🎰 🧩".split(" ")
+  },
+  {
+    label: "Viajes",
+    emojis: "🚗 🚕 🚙 🚌 🚎 🏎️ 🚓 🚑 🚒 🚐 🛻 🚚 🚛 🚜 🏍️ 🛵 🚲 🛴 🛹 🛼 🚨 🚔 🚍 🚘 🚖 🚡 🚠 🚟 🚃 🚋 🚞 🚝 🚄 🚅 🚈 🚂 🚆 🚇 🚊 🚉 ✈️ 🛫 🛬 🛩️ 💺 🛰️ 🚀 🛸 🚁 🛶 ⛵ 🚤 🛥️ 🛳️ ⛴️ 🚢 ⚓ 🛟 🪝 ⛽ 🚧 🚦 🚥 🚏 🗺️ 🗿 🗽 🗼 🏰 🏯 🏟️ 🎡 🎢 🎠 ⛲ ⛱️ 🏖️ 🏝️ 🏜️ 🌋 ⛰️ 🏔️ 🗻 🏕️ ⛺ 🛖 🏠 🏡 🏘️ 🏚️ 🏗️ 🏭 🏢 🏬 🏣 🏤 🏥 🏦 🏨 🏪 🏫 🏩 💒 🏛️ ⛪ 🕌 🕍 🛕 🕋 ⛩️".split(" ")
+  },
+  {
+    label: "Objetos",
+    emojis: "⌚ 📱 📲 💻 ⌨️ 🖥️ 🖨️ 🖱️ 🖲️ 🕹️ 🗜️ 💽 💾 💿 📀 📼 📷 📸 📹 🎥 📽️ 🎞️ 📞 ☎️ 📟 📠 📺 📻 🎙️ 🎚️ 🎛️ 🧭 ⏱️ ⏲️ ⏰ 🕰️ ⌛ ⏳ 📡 🔋 🪫 🔌 💡 🔦 🕯️ 🪔 🧯 🛢️ 💸 💵 💴 💶 💷 🪙 💰 💳 🪪 💎 ⚖️ 🪜 🧰 🪛 🔧 🔨 ⚒️ 🛠️ ⛏️ 🪚 🔩 ⚙️ 🪤 🧱 ⛓️ 🧲 🔫 💣 🧨 🪓 🔪 🗡️ ⚔️ 🛡️ 🚬 ⚰️ 🪦 ⚱️ 🏺 🔮 📿 🧿 🪬 💈 ⚗️ 🔭 🔬 🕳️ 🩹 🩺 🩻 🩼 💊 💉 🩸 🧬 🦠 🧫 🧪 🌡️ 🧹 🪠 🧺 🧻 🚽 🚰 🚿 🛁 🛀 🧼 🪥 🪒 🧽 🪣 🧴 🛎️ 🔑 🗝️ 🚪 🪑 🛋️ 🛏️ 🛌 🧸 🪆 🖼️ 🪞 🪟 🛍️ 🛒 🎁 🎈 🎏 🎀 🪄 🪅 🎊 🎉 🪩 🧧 ✉️ 📩 📨 📧 💌 📥 📤 📦 🏷️ 📪 📫 📬 📭 📮 📯 📜 📃 📄 📑 🧾 📊 📈 📉 🗒️ 🗓️ 📆 📅 🗑️ 📇 🗃️ 🗳️ 🗄️ 📋 📁 📂 🗂️ 🗞️ 📰 📓 📔 📒 📕 📗 📘 📙 📚 📖 🔖 🧷 🔗 📎 🖇️ 📐 📏 🧮 📌 📍 ✂️ 🖊️ 🖋️ ✒️ 🖌️ 🖍️ 📝 ✏️ 🔍 🔎 🔏 🔐 🔒 🔓".split(" ")
+  },
+  {
+    label: "Símbolos",
+    emojis: "🏧 🚮 🚰 ♿ 🚹 🚺 🚻 🚼 🚾 🛂 🛃 🛄 🛅 ⚠️ 🚸 ⛔ 🚫 🚳 🚭 🚯 🚱 🚷 📵 🔞 ☢️ ☣️ ⬆️ ↗️ ➡️ ↘️ ⬇️ ↙️ ⬅️ ↖️ ↕️ ↔️ ↩️ ↪️ ⤴️ ⤵️ 🔃 🔄 🔙 🔚 🔛 🔜 🔝 🛐 ⚛️ 🕉️ ✡️ ☸️ ☯️ ✝️ ☦️ ☪️ ☮️ 🕎 🔯 🪯 ♈ ♉ ♊ ♋ ♌ ♍ ♎ ♏ ♐ ♑ ♒ ♓ ⛎ 🔀 🔁 🔂 ▶️ ⏩ ⏭️ ⏯️ ◀️ ⏪ ⏮️ 🔼 ⏫ 🔽 ⏬ ⏸️ ⏹️ ⏺️ ⏏️ 🎦 🔅 🔆 📶 🛜 📳 📴 ♀️ ♂️ ⚧️ ✖️ ➕ ➖ ➗ 🟰 ♾️ ‼️ ⁉️ ❓ ❔ ❕ ❗ 〰️ 💱 💲 ⚕️ ♻️ ⚜️ 🔱 📛 🔰 ⭕ ✅ ☑️ ✔️ ❌ ❎ ➰ ➿ 〽️ ✳️ ✴️ ❇️ ©️ ®️ ™️ #️⃣ *️⃣ 0️⃣ 1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ 7️⃣ 8️⃣ 9️⃣ 🔟 🔠 🔡 🔢 🔣 🔤 🅰️ 🆎 🅱️ 🆑 🆒 🆓 ℹ️ 🆔 Ⓜ️ 🆕 🆖 🅾️ 🆗 🅿️ 🆘 🆙 🆚 🈁 🈂️ 🈷️ 🈶 🈯 🉐 🈹 🈚 🈲 🉑 🈸 🈴 🈳 ㊗️ ㊙️ 🈺 🈵 🔴 🟠 🟡 🟢 🔵 🟣 🟤 ⚫ ⚪ 🟥 🟧 🟨 🟩 🟦 🟪 🟫 ⬛ ⬜ ◼️ ◻️ ◾ ◽ ▪️ ▫️ 🔶 🔷 🔸 🔹 🔺 🔻 💠 🔘 🔳 🔲".split(" ")
+  },
+  {
+    label: "Banderas",
+    emojis: "🏁 🚩 🎌 🏴 🏳️ 🏳️‍🌈 🏳️‍⚧️ 🏴‍☠️ 🇦🇨 🇦🇩 🇦🇪 🇦🇫 🇦🇬 🇦🇮 🇦🇱 🇦🇲 🇦🇴 🇦🇶 🇦🇷 🇦🇸 🇦🇹 🇦🇺 🇦🇼 🇦🇽 🇦🇿 🇧🇦 🇧🇧 🇧🇩 🇧🇪 🇧🇫 🇧🇬 🇧🇭 🇧🇮 🇧🇯 🇧🇱 🇧🇲 🇧🇳 🇧🇴 🇧🇶 🇧🇷 🇧🇸 🇧🇹 🇧🇻 🇧🇼 🇧🇾 🇧🇿 🇨🇦 🇨🇨 🇨🇩 🇨🇫 🇨🇬 🇨🇭 🇨🇮 🇨🇰 🇨🇱 🇨🇲 🇨🇳 🇨🇴 🇨🇵 🇨🇷 🇨🇺 🇨🇻 🇨🇼 🇨🇽 🇨🇾 🇨🇿 🇩🇪 🇩🇬 🇩🇯 🇩🇰 🇩🇲 🇩🇴 🇩🇿 🇪🇦 🇪🇨 🇪🇪 🇪🇬 🇪🇭 🇪🇷 🇪🇸 🇪🇹 🇪🇺 🇫🇮 🇫🇯 🇫🇰 🇫🇲 🇫🇴 🇫🇷 🇬🇦 🇬🇧 🇬🇩 🇬🇪 🇬🇫 🇬🇬 🇬🇭 🇬🇮 🇬🇱 🇬🇲 🇬🇳 🇬🇵 🇬🇶 🇬🇷 🇬🇸 🇬🇹 🇬🇺 🇬🇼 🇬🇾 🇭🇰 🇭🇲 🇭🇳 🇭🇷 🇭🇹 🇭🇺 🇮🇨 🇮🇩 🇮🇪 🇮🇱 🇮🇲 🇮🇳 🇮🇴 🇮🇶 🇮🇷 🇮🇸 🇮🇹 🇯🇪 🇯🇲 🇯🇴 🇯🇵 🇰🇪 🇰🇬 🇰🇭 🇰🇮 🇰🇲 🇰🇳 🇰🇵 🇰🇷 🇰🇼 🇰🇾 🇰🇿 🇱🇦 🇱🇧 🇱🇨 🇱🇮 🇱🇰 🇱🇷 🇱🇸 🇱🇹 🇱🇺 🇱🇻 🇱🇾 🇲🇦 🇲🇨 🇲🇩 🇲🇪 🇲🇫 🇲🇬 🇲🇭 🇲🇰 🇲🇱 🇲🇲 🇲🇳 🇲🇴 🇲🇵 🇲🇶 🇲🇷 🇲🇸 🇲🇹 🇲🇺 🇲🇻 🇲🇼 🇲🇽 🇲🇾 🇲🇿 🇳🇦 🇳🇨 🇳🇪 🇳🇫 🇳🇬 🇳🇮 🇳🇱 🇳🇴 🇳🇵 🇳🇷 🇳🇺 🇳🇿 🇴🇲 🇵🇦 🇵🇪 🇵🇫 🇵🇬 🇵🇭 🇵🇰 🇵🇱 🇵🇲 🇵🇳 🇵🇷 🇵🇸 🇵🇹 🇵🇼 🇵🇾 🇶🇦 🇷🇪 🇷🇴 🇷🇸 🇷🇺 🇷🇼 🇸🇦 🇸🇧 🇸🇨 🇸🇩 🇸🇪 🇸🇬 🇸🇭 🇸🇮 🇸🇯 🇸🇰 🇸🇱 🇸🇲 🇸🇳 🇸🇴 🇸🇷 🇸🇸 🇸🇹 🇸🇻 🇸🇽 🇸🇾 🇸🇿 🇹🇦 🇹🇨 🇹🇩 🇹🇫 🇹🇬 🇹🇭 🇹🇯 🇹🇰 🇹🇱 🇹🇲 🇹🇳 🇹🇴 🇹🇷 🇹🇹 🇹🇻 🇹🇼 🇹🇿 🇺🇦 🇺🇬 🇺🇲 🇺🇳 🇺🇸 🇺🇾 🇺🇿 🇻🇦 🇻🇨 🇻🇪 🇻🇬 🇻🇮 🇻🇳 🇻🇺 🇼🇫 🇼🇸 🇽🇰 🇾🇪 🇾🇹 🇿🇦 🇿🇲 🇿🇼".split(" ")
+  }
+];
+
+function insertEmoji(emoji) {
   const start = messageInput.selectionStart;
   const end = messageInput.selectionEnd;
-  messageInput.value = `${messageInput.value.slice(0, start)}${insert}${messageInput.value.slice(end)}`;
-  messageInput.selectionStart = start + insert.length;
-  messageInput.selectionEnd = start + insert.length;
+  const nextValue = `${messageInput.value.slice(0, start)}${emoji}${messageInput.value.slice(end)}`;
+  const maxLength = Number(messageInput.maxLength);
+  if (maxLength > 0 && nextValue.length > maxLength) return;
+  messageInput.value = nextValue;
+  const cursor = start + emoji.length;
+  messageInput.selectionStart = cursor;
+  messageInput.selectionEnd = cursor;
+  messageInput.dispatchEvent(new Event("input", { bubbles: true }));
   messageInput.focus();
+}
+
+function closeEmojiPicker() {
+  emojiPicker.hidden = true;
+  emojiButton.setAttribute("aria-expanded", "false");
+}
+
+function toggleEmojiPicker() {
+  emojiPicker.hidden = !emojiPicker.hidden;
+  emojiButton.setAttribute("aria-expanded", String(!emojiPicker.hidden));
+}
+
+function buildEmojiPicker() {
+  emojiButton.setAttribute("aria-haspopup", "dialog");
+  emojiButton.setAttribute("aria-expanded", "false");
+  emojiGroups.forEach(group => {
+    const section = document.createElement("section");
+    section.className = "emoji-picker-section";
+
+    const title = document.createElement("h3");
+    title.textContent = group.label;
+    section.append(title);
+
+    const grid = document.createElement("div");
+    grid.className = "emoji-grid";
+    group.emojis.forEach(emoji => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "emoji-option";
+      button.textContent = emoji;
+      button.setAttribute("aria-label", `Insertar ${emoji}`);
+      button.addEventListener("click", () => insertEmoji(emoji));
+      grid.append(button);
+    });
+    section.append(grid);
+    emojiPicker.append(section);
+  });
+}
+
+buildEmojiPicker();
+
+emojiButton.addEventListener("click", () => {
+  toggleEmojiPicker();
+});
+
+document.addEventListener("click", event => {
+  if (emojiPicker.hidden) return;
+  if (event.target.closest("#emojiPicker, #emojiButton")) return;
+  closeEmojiPicker();
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") closeEmojiPicker();
 });
 
 muteButton.addEventListener("click", () => {
@@ -2104,6 +2601,24 @@ members.addEventListener("click", event => {
 });
 
 messagesList.addEventListener("click", async event => {
+  const moreButton = event.target.closest(".message-more-button");
+  if (moreButton) {
+    const message = moreButton.closest(".message");
+    const actions = message?.querySelector(".message-actions");
+    if (!message || !actions) return;
+    const shouldOpen = actions.hidden;
+    messagesList.querySelectorAll(".message.actions-open").forEach(openMessage => {
+      if (openMessage === message) return;
+      openMessage.classList.remove("actions-open");
+      openMessage.querySelector(".message-actions").hidden = true;
+      openMessage.querySelector(".message-more-button")?.setAttribute("aria-expanded", "false");
+    });
+    actions.hidden = !shouldOpen;
+    message.classList.toggle("actions-open", shouldOpen);
+    moreButton.setAttribute("aria-expanded", String(shouldOpen));
+    return;
+  }
+
   const tool = event.target.closest(".message-tool");
   if (tool) {
     const message = messageHistory.find(item => item.id === tool.dataset.messageId);
@@ -2147,6 +2662,15 @@ messagesList.addEventListener("click", async event => {
     mergeMessages([await response.json()]);
     renderMessages();
   }
+});
+
+document.addEventListener("click", event => {
+  if (event.target.closest(".message")) return;
+  messagesList.querySelectorAll(".message.actions-open").forEach(message => {
+    message.classList.remove("actions-open");
+    message.querySelector(".message-actions").hidden = true;
+    message.querySelector(".message-more-button")?.setAttribute("aria-expanded", "false");
+  });
 });
 
 voiceChannels.addEventListener("click", event => {

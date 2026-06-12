@@ -125,18 +125,23 @@
           <footer class="voice-controls" aria-label="Controles de llamada">
             <button class="call-control" id="callMuteButton" type="button" title="Microfono" aria-label="Microfono">
               <span class="panel-icon mic-icon" aria-hidden="true"></span>
+              <span class="control-tooltip" role="tooltip">Microfono</span>
             </button>
             <button class="call-control" id="callDeafenButton" type="button" title="Ensordecer" aria-label="Ensordecer">
               <span class="panel-icon headphones-icon" aria-hidden="true"></span>
+              <span class="control-tooltip" role="tooltip">Audifonos</span>
             </button>
             <button class="call-control" id="cameraButton" type="button" title="Camara" aria-label="Camara">
               <span class="panel-icon camera-icon" aria-hidden="true"></span>
+              <span class="control-tooltip" role="tooltip">Camara</span>
             </button>
             <button class="call-control" id="screenShareButton" type="button" title="Transmitir pantalla" aria-label="Transmitir pantalla">
               <span class="panel-icon screen-icon" aria-hidden="true"></span>
+              <span class="control-tooltip" role="tooltip">Compartir pantalla</span>
             </button>
             <button class="call-control hangup" id="hangupButton" type="button" title="Colgar" aria-label="Colgar">
               <span class="panel-icon hangup-icon" aria-hidden="true"></span>
+              <span class="control-tooltip" role="tooltip">Colgar</span>
             </button>
           </footer>
         </section>
@@ -182,6 +187,7 @@
               <input id="fileInput" type="file" multiple hidden>
               <textarea id="messageInput" maxlength="500" rows="1" placeholder="Enviar mensaje a #general"></textarea>
               <button class="emoji-button" id="emojiButton" type="button" aria-label="Insertar emoji" title="Insertar emoji">:)</button>
+              <div class="emoji-picker" id="emojiPicker" role="dialog" aria-label="Emojis" hidden></div>
               <button class="send-button" type="submit" aria-label="Enviar mensaje" title="Enviar">Enviar</button>
               <div class="upload-progress" id="uploadProgress" hidden>
                 <div class="upload-progress-bar" id="uploadProgressBar"></div>
@@ -301,6 +307,36 @@
         <button class="save-settings" id="toggleLockButton" value="close" type="submit">Bloquear/desbloquear canal</button>
       </form>
     </dialog>
+    <dialog class="screen-share-dialog" id="screenShareDialog" aria-label="Compartir pantalla">
+      <form method="dialog" class="screen-share-panel" id="screenSharePanel">
+        <header class="screen-share-header">
+          <div class="screen-share-glyph" aria-hidden="true"></div>
+          <div>
+            <h2>Compartir pantalla</h2>
+            <p>Elige una ventana o pantalla para transmitir en la sala</p>
+          </div>
+        </header>
+        <div class="screen-share-status" id="screenShareStatus" aria-live="polite"></div>
+        <section class="screen-selected-preview" id="screenSelectedPreview" hidden>
+          <div class="screen-selected-frame">
+            <img id="screenSelectedImage" alt="">
+          </div>
+          <div class="screen-selected-meta">
+            <span id="screenSelectedType"></span>
+            <strong id="screenSelectedName"></strong>
+          </div>
+        </section>
+        <div class="screen-source-list" id="screenSourceList" hidden></div>
+        <footer class="screen-share-actions">
+          <button class="screen-share-secondary" id="screenShareCancelButton" type="button">Cancelar</button>
+          <button class="screen-share-primary" id="screenShareConfirmButton" type="button" disabled>Compartir ahora</button>
+        </footer>
+      </form>
+    </dialog>
+    <div class="voice-toast" id="voiceToast" role="status" aria-live="polite" hidden>
+      <span class="voice-toast-icon" aria-hidden="true">!</span>
+      <span id="voiceToastText"></span>
+    </div>
     <div id="remoteAudio" aria-hidden="true"></div>
 
     <script src="/socket.io/socket.io.js"></script>

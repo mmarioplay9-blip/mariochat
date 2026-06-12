@@ -7,8 +7,8 @@ const { Server } = require("socket.io");
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, "public");
-const DATA_DIR = path.join(__dirname, "data");
-const UPLOADS_DIR = path.join(__dirname, "uploads");
+const DATA_DIR = process.env.MARIOCHAT_DATA_DIR || path.join(__dirname, "data");
+const UPLOADS_DIR = process.env.MARIOCHAT_UPLOADS_DIR || path.join(__dirname, "uploads");
 const BACKUPS_DIR = path.join(DATA_DIR, "backups");
 const LOGS_DIR = path.join(DATA_DIR, "logs");
 const DB_FILE = path.join(DATA_DIR, "mariochat.json");
